@@ -1,6 +1,6 @@
 ---
 title: NeuroLens AI Creative Response Lab
-emoji: N
+emoji: 🧠
 colorFrom: blue
 colorTo: green
 sdk: streamlit
