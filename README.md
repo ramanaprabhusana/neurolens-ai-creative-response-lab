@@ -1,3 +1,14 @@
+---
+title: NeuroLens AI Creative Response Lab
+emoji: N
+colorFrom: blue
+colorTo: green
+sdk: streamlit
+sdk_version: 1.56.0
+app_file: app.py
+pinned: false
+---
+
 # NeuroLens AI: Creative Response Lab
 
 NeuroLens AI is a stateless Streamlit application for creative audits, mock A/B prediction, and live webcam-based biometric telemetry. It uses computer vision and lightweight analytics to help evaluate digital advertising assets without a database or persistent storage layer.
