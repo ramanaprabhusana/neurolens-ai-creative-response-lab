@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime
 from io import BytesIO
@@ -49,6 +50,12 @@ CACHE_DATA_KWARGS = {
     "ttl": CACHE_TTL_SECONDS,
     "max_entries": CACHE_MAX_ENTRIES,
 }
+DEFAULT_STUN_SERVERS = ["stun:stun.l.google.com:19302"]
+PUBLIC_TURN_SERVERS = [
+    "turn:openrelay.metered.ca:80",
+    "turn:openrelay.metered.ca:443",
+    "turn:openrelay.metered.ca:443?transport=tcp",
+]
 
 
 st.set_page_config(page_title=APP_NAME, page_icon="N", layout="wide")
@@ -319,7 +326,7 @@ def render_neuromarketing_lab() -> None:
             mode=WebRtcMode.SENDRECV,
             video_processor_factory=EmotionVideoProcessor,
             media_stream_constraints={"video": True, "audio": False},
-            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+            rtc_configuration=webrtc_rtc_configuration(),
             async_processing=True,
         )
 
@@ -348,6 +355,44 @@ def render_live_metrics_fragment(ctx) -> None:
 
 if hasattr(st, "fragment"):
     render_live_metrics_fragment = st.fragment(run_every="1s")(render_live_metrics_fragment)
+
+
+def webrtc_rtc_configuration() -> dict:
+    """Return ICE servers for browser-to-Space webcam connectivity.
+
+    STUN is enough on some networks, but hosted Streamlit/WebRTC deployments
+    often need TURN relay candidates. Production deployments can provide
+    TURN_URLS, TURN_USERNAME, and TURN_CREDENTIAL as secrets. The public
+    OpenRelay fallback keeps the showcase usable when no private TURN service
+    has been configured.
+    """
+    ice_servers = [{"urls": DEFAULT_STUN_SERVERS}]
+    turn_urls = split_env_list("TURN_URLS")
+    turn_username = os.getenv("TURN_USERNAME", "")
+    turn_credential = os.getenv("TURN_CREDENTIAL", "")
+
+    if turn_urls and turn_username and turn_credential:
+        ice_servers.append(
+            {
+                "urls": turn_urls,
+                "username": turn_username,
+                "credential": turn_credential,
+            }
+        )
+    elif os.getenv("ENABLE_PUBLIC_TURN", "1").strip().lower() not in {"0", "false", "no"}:
+        ice_servers.append(
+            {
+                "urls": PUBLIC_TURN_SERVERS,
+                "username": "openrelayproject",
+                "credential": "openrelayproject",
+            }
+        )
+    return {"iceServers": ice_servers}
+
+
+def split_env_list(name: str) -> list[str]:
+    value = os.getenv(name, "")
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def render_sidebar() -> None:
