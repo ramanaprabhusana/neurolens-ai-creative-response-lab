@@ -387,7 +387,12 @@ def webrtc_rtc_configuration() -> dict:
                 "credential": "openrelayproject",
             }
         )
-    return {"iceServers": ice_servers}
+
+    default_policy = "relay" if len(ice_servers) > 1 else "all"
+    ice_transport_policy = os.getenv("WEBRTC_ICE_TRANSPORT_POLICY", default_policy).strip().lower()
+    if ice_transport_policy not in {"all", "relay"}:
+        ice_transport_policy = default_policy
+    return {"iceServers": ice_servers, "iceTransportPolicy": ice_transport_policy}
 
 
 def split_env_list(name: str) -> list[str]:
