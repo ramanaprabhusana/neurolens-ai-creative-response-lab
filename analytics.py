@@ -14,7 +14,7 @@ import numpy as np
 import plotly.express as px
 from PIL import Image
 from skimage.measure import shannon_entropy
-from sklearn.cluster import KMeans
+from sklearn.cluster import MiniBatchKMeans
 
 
 COLOR_PSYCHOLOGY = {
@@ -46,6 +46,12 @@ COLOR_EMOTION_OPTIONS = [
     "Premium/Aspiration",
     "Neutral/Clarity",
 ]
+
+ENTROPY_MAX_SIDE = 512
+COLOR_MAX_SIDE = 360
+COLOR_SAMPLE_PIXELS = 8_000
+HEATMAP_MAX_SIDE = 640
+ACCESSIBILITY_MAX_SIDE = 640
 
 PSYCHOLOGY_TO_EMOTION = {
     "High Urgency": "Action/Urgency",
@@ -101,9 +107,18 @@ def resize_for_analysis(image_rgb: np.ndarray, max_side: int = 700) -> np.ndarra
     return cv2.resize(image_rgb, (target_width, target_height), interpolation=cv2.INTER_AREA)
 
 
+def sample_color_pixels(image_rgb: np.ndarray, max_pixels: int = COLOR_SAMPLE_PIXELS) -> np.ndarray:
+    """Return a deterministic pixel sample for interactive color clustering."""
+    pixels = image_rgb.reshape(-1, 3)
+    if len(pixels) > max_pixels:
+        rng = np.random.default_rng(42)
+        pixels = pixels[rng.choice(len(pixels), size=max_pixels, replace=False)]
+    return np.ascontiguousarray(pixels, dtype=np.float32)
+
+
 def calculate_entropy(image: Image.Image | np.ndarray) -> float:
     """Calculate Shannon entropy over grayscale luminance."""
-    image_rgb = _as_rgb_array(image)
+    image_rgb = resize_for_analysis(_as_rgb_array(image), max_side=ENTROPY_MAX_SIDE)
     gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
     return float(shannon_entropy(gray))
 
@@ -120,16 +135,18 @@ def clutter_score(entropy: float) -> int:
 
 def extract_dominant_colors(image: Image.Image | np.ndarray, k: int = 3) -> list[ColorInsight]:
     """Extract dominant colors with K-Means and annotate their psychology."""
-    image_rgb = resize_for_analysis(_as_rgb_array(image), max_side=420)
-    pixels = image_rgb.reshape(-1, 3)
+    image_rgb = resize_for_analysis(_as_rgb_array(image), max_side=COLOR_MAX_SIDE)
+    pixels = sample_color_pixels(image_rgb)
 
-    if len(pixels) > 18_000:
-        rng = np.random.default_rng(42)
-        pixels = pixels[rng.choice(len(pixels), size=18_000, replace=False)]
-
-    unique_count = len(np.unique(pixels, axis=0))
+    unique_count = len(np.unique(pixels.astype(np.uint8), axis=0))
     cluster_count = max(1, min(k, unique_count))
-    kmeans = KMeans(n_clusters=cluster_count, random_state=42, n_init=10)
+    kmeans = MiniBatchKMeans(
+        n_clusters=cluster_count,
+        random_state=42,
+        n_init=3,
+        max_iter=60,
+        batch_size=1024,
+    )
     labels = kmeans.fit_predict(pixels)
     counts = np.bincount(labels, minlength=cluster_count)
     total = counts.sum() or 1
@@ -167,12 +184,12 @@ def generate_attention_heatmap(image: Image.Image | np.ndarray, alpha: float = 0
 
 def generate_attention_heatmap_layers(image: Image.Image | np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Create heavy saliency layers once so opacity sliders only re-blend pixels."""
-    image_rgb = resize_for_analysis(_as_rgb_array(image), max_side=900)
+    image_rgb = resize_for_analysis(_as_rgb_array(image), max_side=HEATMAP_MAX_SIDE)
     gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
 
     edges = cv2.Canny(gray, threshold1=60, threshold2=150)
-    local_contrast = cv2.Laplacian(gray, cv2.CV_64F)
-    local_contrast = np.uint8(np.clip(np.absolute(local_contrast), 0, 255))
+    local_contrast = cv2.Laplacian(gray, cv2.CV_16S)
+    local_contrast = cv2.convertScaleAbs(local_contrast)
 
     saliency = cv2.addWeighted(edges, 0.55, local_contrast, 0.45, 0)
     saliency = cv2.GaussianBlur(saliency, (0, 0), sigmaX=11, sigmaY=11)
@@ -227,21 +244,25 @@ def score_ad(image: Image.Image | np.ndarray) -> dict:
     }
 
 
-def analyze_accessibility_contrast(image: Image.Image | np.ndarray) -> tuple[AccessibilityInsight, np.ndarray]:
+def analyze_accessibility_contrast(
+    image: Image.Image | np.ndarray,
+    color_profile: list[ColorInsight] | None = None,
+) -> tuple[AccessibilityInsight, np.ndarray]:
     """Estimate text/background contrast risk and render a low-contrast risk overlay.
 
     This is not OCR. It approximates the platform/accessibility risk by pairing
     dominant luminance clusters with edge-dense low-local-contrast regions where
     ad copy commonly lives.
     """
-    image_rgb = resize_for_analysis(_as_rgb_array(image), max_side=900)
-    colors = extract_dominant_colors(image_rgb, k=5)
+    image_rgb = resize_for_analysis(_as_rgb_array(image), max_side=ACCESSIBILITY_MAX_SIDE)
+    colors = color_profile or extract_dominant_colors(image_rgb, k=5)
     foreground, background, ratio = _best_contrast_pair(colors)
 
     gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
-    mean = cv2.blur(gray.astype(np.float32), (31, 31))
-    sq_mean = cv2.blur(np.square(gray.astype(np.float32)), (31, 31))
-    local_std = np.sqrt(np.maximum(sq_mean - np.square(mean), 0))
+    gray32 = gray.astype(np.float32)
+    mean = cv2.blur(gray32, (31, 31))
+    sq_mean = cv2.blur(gray32 * gray32, (31, 31))
+    local_std = np.sqrt(np.maximum(sq_mean - mean * mean, 0))
     soft_edges = cv2.Canny(gray, 20, 70)
     soft_edges = cv2.dilate(soft_edges, np.ones((5, 5), dtype=np.uint8), iterations=1)
 

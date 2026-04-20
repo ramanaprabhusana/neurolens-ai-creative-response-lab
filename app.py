@@ -15,6 +15,7 @@ from streamlit_webrtc import WebRtcMode, webrtc_streamer
 
 from analytics import (
     COLOR_EMOTION_OPTIONS,
+    ColorInsight,
     analyze_accessibility_contrast,
     blend_heatmap_layers,
     calculate_kpi_forecast,
@@ -22,7 +23,6 @@ from analytics import (
     generate_persona_radar,
     micro_edit_prescriptions,
     normalize_color_emotion,
-    score_ad,
 )
 from telemetry import (
     begin_cache_probe,
@@ -40,8 +40,15 @@ SAMPLE_CREATIVES = {
     "Cluttered Retail": "cluttered",
     "Trust SaaS": "trust",
 }
-MAX_IMAGE_PIXELS = 24_000_000
+MAX_IMAGE_PIXELS = 12_000_000
 MAX_ASPECT_RATIO = 8.0
+CACHE_TTL_SECONDS = 60 * 60
+CACHE_MAX_ENTRIES = 24
+CACHE_DATA_KWARGS = {
+    "show_spinner": False,
+    "ttl": CACHE_TTL_SECONDS,
+    "max_entries": CACHE_MAX_ENTRIES,
+}
 
 
 st.set_page_config(page_title=APP_NAME, page_icon="N", layout="wide")
@@ -107,7 +114,11 @@ def render_visual_asset_audit() -> None:
     if audit is None:
         return
     image, results, heatmap = audit
-    accessibility = analyze_accessibility_safely(creative_bytes, source_name)
+    accessibility = analyze_accessibility_safely(
+        creative_bytes,
+        source_name,
+        color_profile=results.get("colors", []),
+    )
 
     left, right = st.columns([1.05, 0.95], vertical_alignment="top")
     with left:
@@ -312,22 +323,31 @@ def render_neuromarketing_lab() -> None:
             async_processing=True,
         )
 
-        metric_slots = st.container()
-        status = st.empty()
+        render_live_metrics_fragment(ctx)
 
-        if ctx.state.playing:
-            processor = ctx.video_processor
-            metrics = processor.get_metrics() if processor else {}
-            render_live_metrics(metric_slots, metrics)
-            if metrics.get("face_detected"):
-                status.success("Face signal detected. Latest-frame telemetry is active.")
-            else:
-                status.info("Camera is active. Center your face in frame to begin telemetry.")
-            time.sleep(0.35)
-            st.rerun()
+
+def render_live_metrics_fragment(ctx) -> None:
+    metric_slots = st.container()
+    status = st.empty()
+
+    if ctx.state.playing:
+        processor = ctx.video_processor
+        metrics = processor.get_metrics() if processor else {}
+        render_live_metrics(metric_slots, metrics)
+        if metrics.get("face_detected"):
+            status.success("Face signal detected. Latest-frame telemetry is active.")
         else:
-            render_live_metrics(metric_slots, {})
-            status.info("Start the camera to compare predicted response with live facial telemetry. If access is denied, the rest of the suite stays usable.")
+            status.info("Camera is active. Center your face in frame to begin telemetry.")
+    else:
+        render_live_metrics(metric_slots, {})
+        status.info(
+            "Start the camera to compare predicted response with live facial telemetry. "
+            "If access is denied, the rest of the suite stays usable."
+        )
+
+
+if hasattr(st, "fragment"):
+    render_live_metrics_fragment = st.fragment(run_every="1s")(render_live_metrics_fragment)
 
 
 def render_sidebar() -> None:
@@ -484,10 +504,14 @@ def analyze_creative(
         return None
 
 
-def analyze_accessibility_safely(file_bytes: bytes, source_name: str):
+def analyze_accessibility_safely(
+    file_bytes: bytes,
+    source_name: str,
+    color_profile: list[ColorInsight] | None = None,
+):
     try:
         with st.spinner("Scanning contrast and accessibility risk..."):
-            return cached_accessibility_from_bytes(file_bytes)
+            return cached_accessibility_from_bytes(file_bytes, color_profile_cache_key(color_profile))
     except (cv2.error, ValueError, RuntimeError) as exc:
         st.warning(f"{source_name} could not be scanned for contrast risk.")
         st.caption(str(exc))
@@ -503,7 +527,7 @@ def load_image_safely(file_bytes: bytes, source_name: str) -> Image.Image | None
         return None
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(**CACHE_DATA_KWARGS)
 def cached_image_from_bytes(file_bytes: bytes) -> Image.Image:
     return normalize_image_bytes(file_bytes)
 
@@ -538,19 +562,19 @@ def normalize_image_bytes(file_bytes: bytes) -> Image.Image:
         return image.convert("RGB")
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(**CACHE_DATA_KWARGS)
 def cached_score_payload_from_bytes(file_bytes: bytes, cache_label: str) -> dict:
     mark_cache_miss(cache_label)
     score, timings_ms, memory_mb = score_ad_with_telemetry(cached_image_from_bytes(file_bytes))
     return {"score": score, "timings_ms": timings_ms, "memory_mb": memory_mb}
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(**CACHE_DATA_KWARGS)
 def cached_score_from_bytes(file_bytes: bytes) -> dict:
     return cached_score_payload_from_bytes(file_bytes, cache_probe_label("score", file_bytes))["score"]
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(**CACHE_DATA_KWARGS)
 def cached_attention_payload_from_bytes(file_bytes: bytes, cache_label: str) -> dict:
     mark_cache_miss(cache_label)
     image_rgb, color_heatmap, timings_ms, memory_mb = generate_attention_heatmap_layers_with_telemetry(
@@ -564,13 +588,13 @@ def cached_attention_payload_from_bytes(file_bytes: bytes, cache_label: str) -> 
     }
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(**CACHE_DATA_KWARGS)
 def cached_attention_layers_from_bytes(file_bytes: bytes) -> tuple[np.ndarray, np.ndarray]:
     payload = cached_attention_payload_from_bytes(file_bytes, cache_probe_label("heatmap", file_bytes))
     return payload["image_rgb"], payload["color_heatmap"]
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(**CACHE_DATA_KWARGS)
 def cached_heatmap_from_bytes(file_bytes: bytes, alpha: float) -> np.ndarray:
     image_rgb, color_heatmap = cached_attention_layers_from_bytes(file_bytes)
     return blend_heatmap_layers(image_rgb, color_heatmap, alpha=alpha)
@@ -618,17 +642,41 @@ def cache_probe_label(namespace: str, file_bytes: bytes) -> str:
     return f"{namespace}:{digest}"
 
 
-@st.cache_data(show_spinner=False)
-def cached_accessibility_from_bytes(file_bytes: bytes):
-    return analyze_accessibility_contrast(cached_image_from_bytes(file_bytes))
+@st.cache_data(**CACHE_DATA_KWARGS)
+def cached_accessibility_from_bytes(
+    file_bytes: bytes,
+    color_profile_key: tuple[tuple[str, float, str], ...],
+):
+    return analyze_accessibility_contrast(
+        cached_image_from_bytes(file_bytes),
+        color_profile=color_profile_from_key(color_profile_key),
+    )
 
 
-@st.cache_data(show_spinner=False)
+def color_profile_cache_key(color_profile: list[ColorInsight] | None) -> tuple[tuple[str, float, str], ...]:
+    if not color_profile:
+        return ()
+    return tuple(
+        (color.hex, round(float(color.percentage), 2), color.psychology)
+        for color in color_profile
+    )
+
+
+def color_profile_from_key(color_profile_key: tuple[tuple[str, float, str], ...]) -> list[ColorInsight] | None:
+    if not color_profile_key:
+        return None
+    return [
+        ColorInsight(hex=hex_code, percentage=percentage, psychology=psychology)
+        for hex_code, percentage, psychology in color_profile_key
+    ]
+
+
+@st.cache_data(**CACHE_DATA_KWARGS)
 def cached_compare_ads(bytes_a: bytes, bytes_b: bytes) -> dict:
     return compare_score_dicts(cached_score_from_bytes(bytes_a), cached_score_from_bytes(bytes_b))
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(**CACHE_DATA_KWARGS)
 def cached_doctor_creative_bytes(file_bytes: bytes) -> bytes:
     image = cached_image_from_bytes(file_bytes)
     score = cached_score_from_bytes(file_bytes)
@@ -638,7 +686,7 @@ def cached_doctor_creative_bytes(file_bytes: bytes) -> bytes:
     return buffer.getvalue()
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(**CACHE_DATA_KWARGS)
 def sample_creative_bytes(kind: str) -> bytes:
     image = create_sample_ad(kind)
     buffer = BytesIO()

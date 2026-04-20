@@ -15,6 +15,9 @@ import numpy as np
 from streamlit_webrtc import VideoProcessorBase
 
 
+MAX_WEBCAM_DETECT_SIDE = 480
+
+
 class EmotionVideoProcessor(VideoProcessorBase):
     """OpenCV frame processor that estimates simple emotional telemetry."""
 
@@ -34,7 +37,33 @@ class EmotionVideoProcessor(VideoProcessorBase):
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         image = frame.to_ndarray(format="bgr24")
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        faces = self._face_detector.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=5, minSize=(80, 80))
+        height, width = gray.shape[:2]
+        largest = max(height, width)
+        scale = 1.0
+        detect_gray = gray
+
+        if largest > MAX_WEBCAM_DETECT_SIDE:
+            scale = MAX_WEBCAM_DETECT_SIDE / largest
+            detect_gray = cv2.resize(
+                gray,
+                (max(1, int(width * scale)), max(1, int(height * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        faces = self._face_detector.detectMultiScale(
+            detect_gray,
+            scaleFactor=1.15,
+            minNeighbors=5,
+            minSize=(50, 50),
+        )
+        if scale != 1.0 and len(faces) > 0:
+            faces = np.array(
+                [
+                    (int(x / scale), int(y / scale), int(w / scale), int(h / scale))
+                    for x, y, w, h in faces
+                ],
+                dtype=np.int32,
+            )
 
         metrics = {
             "face_detected": False,

@@ -16,14 +16,19 @@ import cv2
 import numpy as np
 from PIL import Image
 from skimage.measure import shannon_entropy
-from sklearn.cluster import KMeans
+from sklearn.cluster import MiniBatchKMeans
 
 from analytics import (
     ACTION_LABEL_WEIGHTS,
+    COLOR_MAX_SIDE,
+    COLOR_SAMPLE_PIXELS,
+    ENTROPY_MAX_SIDE,
+    HEATMAP_MAX_SIDE,
     ColorInsight,
     clutter_score,
     nearest_color_psychology,
     resize_for_analysis,
+    sample_color_pixels,
 )
 
 
@@ -100,7 +105,7 @@ def score_ad_with_telemetry(image: Image.Image | np.ndarray) -> tuple[dict, dict
 
 def calculate_entropy_with_telemetry(image: Image.Image | np.ndarray, recorder: TelemetryRecorder) -> float:
     """Time the Scikit-Image Shannon entropy call separately."""
-    image_rgb = _as_rgb_array(image)
+    image_rgb = resize_for_analysis(_as_rgb_array(image), max_side=ENTROPY_MAX_SIDE)
     gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
     with execution_timer("scikit_entropy_ms", recorder):
         entropy = shannon_entropy(gray)
@@ -113,15 +118,18 @@ def extract_dominant_colors_with_telemetry(
     k: int = 3,
 ) -> list[ColorInsight]:
     """Extract dominant colors while timing the K-Means clustering step."""
-    image_rgb = resize_for_analysis(_as_rgb_array(image), max_side=420)
-    pixels = image_rgb.reshape(-1, 3)
-    if len(pixels) > 18_000:
-        rng = np.random.default_rng(42)
-        pixels = pixels[rng.choice(len(pixels), size=18_000, replace=False)]
+    image_rgb = resize_for_analysis(_as_rgb_array(image), max_side=COLOR_MAX_SIDE)
+    pixels = sample_color_pixels(image_rgb, max_pixels=COLOR_SAMPLE_PIXELS)
 
-    unique_count = len(np.unique(pixels, axis=0))
+    unique_count = len(np.unique(pixels.astype(np.uint8), axis=0))
     cluster_count = max(1, min(k, unique_count))
-    kmeans = KMeans(n_clusters=cluster_count, random_state=42, n_init=10)
+    kmeans = MiniBatchKMeans(
+        n_clusters=cluster_count,
+        random_state=42,
+        n_init=3,
+        max_iter=60,
+        batch_size=1024,
+    )
     with execution_timer("kmeans_clustering_ms", recorder):
         labels = kmeans.fit_predict(pixels)
 
@@ -164,14 +172,14 @@ def generate_attention_heatmap_layers_with_telemetry(
 ) -> tuple[np.ndarray, np.ndarray, dict[str, float], float]:
     """Create heavy saliency layers while timing OpenCV edge/contrast work."""
     recorder = TelemetryRecorder()
-    image_rgb = resize_for_analysis(_as_rgb_array(image), max_side=900)
+    image_rgb = resize_for_analysis(_as_rgb_array(image), max_side=HEATMAP_MAX_SIDE)
     gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
 
     with execution_timer("heatmap_opencv_edge_detection_ms", recorder):
         edges = cv2.Canny(gray, threshold1=60, threshold2=150)
     with execution_timer("heatmap_opencv_contrast_ms", recorder):
-        local_contrast = cv2.Laplacian(gray, cv2.CV_64F)
-        local_contrast = np.uint8(np.clip(np.absolute(local_contrast), 0, 255))
+        local_contrast = cv2.Laplacian(gray, cv2.CV_16S)
+        local_contrast = cv2.convertScaleAbs(local_contrast)
     with execution_timer("heatmap_layer_render_ms", recorder):
         saliency = cv2.addWeighted(edges, 0.55, local_contrast, 0.45, 0)
         saliency = cv2.GaussianBlur(saliency, (0, 0), sigmaX=11, sigmaY=11)
