@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.playwright-cli/
+.pytest_cache/
+.streamlit/secrets.toml
+.env
+.env.*
+!.env.example
+*.log
+dist/
+build/
