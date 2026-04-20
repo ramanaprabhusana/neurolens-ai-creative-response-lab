@@ -6,6 +6,7 @@ from datetime import datetime
 from io import BytesIO
 
 import cv2
+import hashlib
 import numpy as np
 import plotly.express as px
 import streamlit as st
@@ -18,11 +19,17 @@ from analytics import (
     blend_heatmap_layers,
     calculate_kpi_forecast,
     colors_to_plotly_rows,
-    generate_attention_heatmap_layers,
     generate_persona_radar,
     micro_edit_prescriptions,
     normalize_color_emotion,
     score_ad,
+)
+from telemetry import (
+    begin_cache_probe,
+    end_cache_probe,
+    generate_attention_heatmap_layers_with_telemetry,
+    mark_cache_miss,
+    score_ad_with_telemetry,
 )
 from webrtc_callbacks import EmotionVideoProcessor
 
@@ -145,10 +152,10 @@ def render_creative_doctor() -> None:
         return
 
     with st.spinner("Diagnosing creative and generating recommended layout..."):
-        original_score = cached_score_from_bytes(creative_bytes)
+        original_score = get_cached_score(creative_bytes, "Doctor Original Score")
         doctor_bytes = cached_doctor_creative_bytes(creative_bytes)
         doctor_image = cached_image_from_bytes(doctor_bytes)
-        doctor_score = cached_score_from_bytes(doctor_bytes)
+        doctor_score = get_cached_score(doctor_bytes, "Doctor Recommendation Score")
         comparison = compare_score_dicts(original_score, doctor_score)
 
     render_scorecard("Current creative", original_score)
@@ -201,9 +208,11 @@ def render_ab_predictor() -> None:
         key="ab_heatmap_alpha",
     )
     with st.spinner("Running A/B saliency and entropy model..."):
-        comparison = cached_compare_ads(bytes_a, bytes_b)
-        heatmap_a = cached_heatmap_from_bytes(bytes_a, heatmap_alpha)
-        heatmap_b = cached_heatmap_from_bytes(bytes_b, heatmap_alpha)
+        score_a = get_cached_score(bytes_a, "Ad A Visual Analysis")
+        score_b = get_cached_score(bytes_b, "Ad B Visual Analysis")
+        comparison = compare_score_dicts(score_a, score_b)
+        heatmap_a = get_cached_heatmap(bytes_a, heatmap_alpha, "Ad A Saliency Heatmap")
+        heatmap_b = get_cached_heatmap(bytes_b, heatmap_alpha, "Ad B Saliency Heatmap")
 
     st.success(
         f"Predicted Winner: {comparison['winner']} - "
@@ -335,6 +344,7 @@ def render_sidebar() -> None:
         st.caption(
             "Facial telemetry is heuristic and frame-by-frame. It is a demo signal, not a clinical emotion classifier."
         )
+        render_developer_telemetry()
         with st.expander("Model methodology"):
             st.markdown(
                 """
@@ -369,6 +379,57 @@ def render_showcase_story() -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_developer_telemetry() -> None:
+    telemetry = st.session_state.get("developer_telemetry", {})
+    with st.sidebar.expander("⚙️ Developer Telemetry (Dev Mode)", expanded=False):
+        if not telemetry:
+            st.caption("Run an audit to populate computer vision latency and cache metrics.")
+            return
+
+        for label, event in telemetry.items():
+            st.markdown(f"**{label}**")
+            cols = st.columns(3)
+            cols[0].metric("Cache", event["cache_status"])
+            cols[1].metric("Wall", f"{event['wall_ms']:.1f} ms")
+            cols[2].metric("Memory", f"{event['memory_mb']:.2f} MB")
+
+            timing_rows = event.get("timings_ms", {})
+            if timing_rows:
+                for metric_name, value in timing_rows.items():
+                    st.metric(format_telemetry_label(metric_name), f"{value:.2f} ms")
+            st.divider()
+
+        st.caption("Cache Hit means Streamlit returned cached data and the cached function body did not execute.")
+
+
+def record_developer_telemetry(
+    label: str,
+    cache_status: str,
+    wall_ms: float,
+    timings_ms: dict[str, float],
+    memory_mb: float,
+) -> None:
+    telemetry = dict(st.session_state.get("developer_telemetry", {}))
+    telemetry[label] = {
+        "cache_status": cache_status,
+        "wall_ms": round(float(wall_ms), 2),
+        "timings_ms": dict(timings_ms),
+        "memory_mb": round(float(memory_mb), 2),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    st.session_state["developer_telemetry"] = telemetry
+
+    toast_key = f"telemetry_toast_{label}"
+    previous_status = st.session_state.get(toast_key)
+    if previous_status != cache_status:
+        st.toast(f"{label}: Cache {cache_status}", icon="⚙️")
+        st.session_state[toast_key] = cache_status
+
+
+def format_telemetry_label(metric_name: str) -> str:
+    return metric_name.replace("_ms", "").replace("_", " ").title()
 
 
 def creative_picker(label: str, key: str, default_kind: str) -> tuple[str, bytes | None]:
@@ -412,7 +473,11 @@ def analyze_creative(
         return None
     try:
         with st.spinner("Running computer vision audit..."):
-            return image, cached_score_from_bytes(file_bytes), cached_heatmap_from_bytes(file_bytes, heatmap_alpha)
+            return image, get_cached_score(file_bytes, "Visual Analysis"), get_cached_heatmap(
+                file_bytes,
+                heatmap_alpha,
+                "Saliency Heatmap",
+            )
     except (cv2.error, ValueError, RuntimeError) as exc:
         st.error("The image loaded, but the computer vision audit could not process it safely.")
         st.caption(str(exc))
@@ -474,19 +539,83 @@ def normalize_image_bytes(file_bytes: bytes) -> Image.Image:
 
 
 @st.cache_data(show_spinner=False)
+def cached_score_payload_from_bytes(file_bytes: bytes, cache_label: str) -> dict:
+    mark_cache_miss(cache_label)
+    score, timings_ms, memory_mb = score_ad_with_telemetry(cached_image_from_bytes(file_bytes))
+    return {"score": score, "timings_ms": timings_ms, "memory_mb": memory_mb}
+
+
+@st.cache_data(show_spinner=False)
 def cached_score_from_bytes(file_bytes: bytes) -> dict:
-    return score_ad(cached_image_from_bytes(file_bytes))
+    return cached_score_payload_from_bytes(file_bytes, cache_probe_label("score", file_bytes))["score"]
+
+
+@st.cache_data(show_spinner=False)
+def cached_attention_payload_from_bytes(file_bytes: bytes, cache_label: str) -> dict:
+    mark_cache_miss(cache_label)
+    image_rgb, color_heatmap, timings_ms, memory_mb = generate_attention_heatmap_layers_with_telemetry(
+        cached_image_from_bytes(file_bytes)
+    )
+    return {
+        "image_rgb": image_rgb,
+        "color_heatmap": color_heatmap,
+        "timings_ms": timings_ms,
+        "memory_mb": memory_mb,
+    }
 
 
 @st.cache_data(show_spinner=False)
 def cached_attention_layers_from_bytes(file_bytes: bytes) -> tuple[np.ndarray, np.ndarray]:
-    return generate_attention_heatmap_layers(cached_image_from_bytes(file_bytes))
+    payload = cached_attention_payload_from_bytes(file_bytes, cache_probe_label("heatmap", file_bytes))
+    return payload["image_rgb"], payload["color_heatmap"]
 
 
 @st.cache_data(show_spinner=False)
 def cached_heatmap_from_bytes(file_bytes: bytes, alpha: float) -> np.ndarray:
     image_rgb, color_heatmap = cached_attention_layers_from_bytes(file_bytes)
     return blend_heatmap_layers(image_rgb, color_heatmap, alpha=alpha)
+
+
+def get_cached_score(file_bytes: bytes, label: str) -> dict:
+    cache_label = cache_probe_label("score", file_bytes)
+    previous_count = begin_cache_probe(cache_label)
+    started = time.perf_counter()
+    payload = cached_score_payload_from_bytes(file_bytes, cache_label)
+    wall_ms = (time.perf_counter() - started) * 1000
+    cache_status = end_cache_probe(cache_label, previous_count)
+    record_developer_telemetry(
+        label=label,
+        cache_status=cache_status,
+        wall_ms=wall_ms,
+        timings_ms=payload["timings_ms"],
+        memory_mb=payload["memory_mb"],
+    )
+    return payload["score"]
+
+
+def get_cached_heatmap(file_bytes: bytes, alpha: float, label: str) -> np.ndarray:
+    cache_label = cache_probe_label("heatmap", file_bytes)
+    previous_count = begin_cache_probe(cache_label)
+    started = time.perf_counter()
+    payload = cached_attention_payload_from_bytes(file_bytes, cache_label)
+    heatmap = blend_heatmap_layers(payload["image_rgb"], payload["color_heatmap"], alpha=alpha)
+    wall_ms = (time.perf_counter() - started) * 1000
+    cache_status = end_cache_probe(cache_label, previous_count)
+    timings = dict(payload["timings_ms"])
+    timings["heatmap_alpha_blend_ms"] = round(wall_ms if cache_status == "Hit" else max(0.0, wall_ms - sum(timings.values())), 2)
+    record_developer_telemetry(
+        label=label,
+        cache_status=cache_status,
+        wall_ms=wall_ms,
+        timings_ms=timings,
+        memory_mb=payload["memory_mb"],
+    )
+    return heatmap
+
+
+def cache_probe_label(namespace: str, file_bytes: bytes) -> str:
+    digest = hashlib.sha256(file_bytes).hexdigest()[:16]
+    return f"{namespace}:{digest}"
 
 
 @st.cache_data(show_spinner=False)

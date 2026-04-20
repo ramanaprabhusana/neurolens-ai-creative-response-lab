@@ -18,6 +18,7 @@ All analysis is computed in memory. Streamlit cache usage is ephemeral and only 
 - **A/B Predictor**: Compare two ads with deterministic mock scoring based on clutter, target emotion fit, and central saliency, then download a JSON prediction report with confidence labeling.
 - **Campaign Simulator**: Adjust clutter, saliency, and dominant color psychology assumptions to forecast mock CPC/CVR outcomes and persona fit in real time.
 - **Neuromarketing Lab**: Show an ad stimulus beside a `streamlit-webrtc` webcam feed, display predicted response metrics, and compare them with latest-frame Surprise, Confusion/Anger, Engagement, and face-detection telemetry.
+- **Developer Telemetry**: Inspect cache hits, wall latency, per-function CV timing, and image memory footprint from a sidebar dev-mode panel.
 
 ## Demo Flow
 

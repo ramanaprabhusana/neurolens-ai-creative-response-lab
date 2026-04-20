@@ -18,6 +18,7 @@ from analytics import (
 )
 from app import create_doctor_recommendation, normalize_image_bytes
 from io import BytesIO
+from telemetry import generate_attention_heatmap_layers_with_telemetry, score_ad_with_telemetry
 
 
 def simple_ad() -> Image.Image:
@@ -108,6 +109,21 @@ class AnalyticsTests(unittest.TestCase):
         image.save(buffer, format="PNG")
         normalized = normalize_image_bytes(buffer.getvalue())
         self.assertEqual(normalized.mode, "RGB")
+
+    def test_score_telemetry_includes_heavy_function_timers(self):
+        score, timings, memory_mb = score_ad_with_telemetry(simple_ad())
+        self.assertIn("final_score", score)
+        self.assertIn("scikit_entropy_ms", timings)
+        self.assertIn("kmeans_clustering_ms", timings)
+        self.assertIn("opencv_edge_detection_ms", timings)
+        self.assertGreater(memory_mb, 0)
+
+    def test_heatmap_telemetry_includes_opencv_timers(self):
+        base, layer, timings, memory_mb = generate_attention_heatmap_layers_with_telemetry(simple_ad())
+        self.assertEqual(base.shape, layer.shape)
+        self.assertIn("heatmap_opencv_edge_detection_ms", timings)
+        self.assertIn("heatmap_layer_render_ms", timings)
+        self.assertGreater(memory_mb, 0)
 
 
 if __name__ == "__main__":
