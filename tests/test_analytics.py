@@ -1,6 +1,7 @@
 import unittest
 
 import numpy as np
+import streamlit as st
 from PIL import Image, ImageDraw
 
 from analytics import (
@@ -16,7 +17,15 @@ from analytics import (
     micro_edit_prescriptions,
     score_ad,
 )
-from app import create_doctor_recommendation, create_preferred_symbol_asset, normalize_image_bytes, preferred_symbol_spec
+from app import (
+    SHARED_CREATIVE_KEY,
+    create_doctor_recommendation,
+    create_preferred_symbol_asset,
+    current_uploaded_creative,
+    normalize_image_bytes,
+    preferred_symbol_spec,
+    remember_uploaded_creative,
+)
 from io import BytesIO
 from telemetry import generate_attention_heatmap_layers_with_telemetry, score_ad_with_telemetry
 
@@ -83,6 +92,16 @@ class AnalyticsTests(unittest.TestCase):
         symbol = create_preferred_symbol_asset(score)
         self.assertIn(spec["kind"], {"focus", "arrow", "shield", "spark", "tag"})
         self.assertEqual(symbol.size, (760, 500))
+
+    def test_shared_upload_state_retains_image_bytes(self):
+        st.session_state.pop(SHARED_CREATIVE_KEY, None)
+        self.assertIsNone(current_uploaded_creative())
+
+        remember_uploaded_creative("demo.png", b"abc123")
+        shared = current_uploaded_creative()
+        self.assertEqual(shared["name"], "demo.png")
+        self.assertEqual(shared["bytes"], b"abc123")
+        st.session_state.pop(SHARED_CREATIVE_KEY, None)
 
     def test_kpi_forecast_returns_formatted_business_metrics(self):
         forecast = calculate_kpi_forecast(30, 85, "Action/Urgency")

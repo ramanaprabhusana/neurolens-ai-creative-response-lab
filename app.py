@@ -57,6 +57,7 @@ PUBLIC_TURN_SERVERS = [
     "turn:openrelay.metered.ca:443",
     "turn:openrelay.metered.ca:443?transport=tcp",
 ]
+SHARED_CREATIVE_KEY = "shared_creative_upload"
 
 
 st.set_page_config(page_title=APP_NAME, page_icon="N", layout="wide")
@@ -71,7 +72,7 @@ def main() -> None:
         <section class="nl-hero">
             <div class="nl-kicker">Creative Performance Copilot</div>
             <h1>{APP_NAME}</h1>
-            <p>Upload an ad. NeuroLens shows what may hurt performance, what to improve, and what to test before spending budget.</p>
+            <p>Upload one ad once. NeuroLens carries it through audit, fix output, comparison, forecast, and optional response validation before you spend budget.</p>
             <div class="nl-badges">
                 <span>No database</span>
                 <span>Sample ads included</span>
@@ -84,6 +85,7 @@ def main() -> None:
         unsafe_allow_html=True,
     )
     render_workflow_guide()
+    render_competition_edge()
 
     tab_audit, tab_doctor, tab_ab, tab_simulator, tab_lab = st.tabs(
         ["Audit", "Fix Recommendations", "Compare Ads", "Forecast Impact", "Live Response Lab"]
@@ -231,9 +233,9 @@ def render_ab_predictor() -> None:
     )
     col_a, col_b = st.columns(2)
     with col_a:
-        name_a, bytes_a = creative_picker("Ad A", "ab_a", default_kind="focused")
+        name_a, bytes_a = creative_picker("Ad A", "ab_a", default_kind="focused", prefer_current_upload=True)
     with col_b:
-        name_b, bytes_b = creative_picker("Ad B", "ab_b", default_kind="cluttered")
+        name_b, bytes_b = creative_picker("Ad B", "ab_b", default_kind="cluttered", prefer_current_upload=False)
 
     if bytes_a is None or bytes_b is None:
         st.info("Select or upload both ads to compare their clarity, attention, and emotion-fit signals.")
@@ -499,6 +501,7 @@ def render_sidebar() -> None:
         st.markdown("**Workflow**")
         st.caption("Audit -> Fix -> Compare -> Forecast -> Validate")
         st.caption("UI: app.py | Analytics: analytics.py | Video: webrtc_callbacks.py")
+        render_active_upload_state()
         st.divider()
         st.caption(
             "Facial telemetry is heuristic and frame-by-frame. It is a demo signal, not a clinical emotion classifier."
@@ -524,7 +527,7 @@ def render_workflow_guide() -> None:
             <div class="nl-workflow-intro">
                 <span>Start here</span>
                 <h3>A guided path from ad review to creative action</h3>
-                <p>Use the tabs from left to right: diagnose the creative, generate an edit direction, compare variants, forecast impact, and optionally validate live response.</p>
+                <p>Use the tabs from left to right: upload once, diagnose the creative, generate an edit direction, compare variants, forecast impact, and optionally validate live response.</p>
             </div>
             <div class="nl-workflow-steps">
                 <div><span>1</span><strong>Audit</strong><small>Find clarity and attention risks.</small></div>
@@ -533,6 +536,21 @@ def render_workflow_guide() -> None:
                 <div><span>4</span><strong>Forecast</strong><small>Estimate CPC/CVR movement.</small></div>
                 <div><span>5</span><strong>Validate</strong><small>Check optional live response.</small></div>
             </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_competition_edge() -> None:
+    st.markdown(
+        """
+        <section class="nl-edge">
+            <div>
+                <span>Why this stands out</span>
+                <strong>It closes the loop from creative diagnosis to a usable fix.</strong>
+            </div>
+            <p>Most audit tools stop at scores. NeuroLens keeps the uploaded ad in the workflow, explains what is hurting performance, generates a recommended creative direction, gives a downloadable visual cue and edit brief, then lets the user forecast and validate the response.</p>
         </section>
         """,
         unsafe_allow_html=True,
@@ -603,13 +621,74 @@ def format_telemetry_label(metric_name: str) -> str:
     return metric_name.replace("_ms", "").replace("_", " ").title()
 
 
-def creative_picker(label: str, key: str, default_kind: str) -> tuple[str, bytes | None]:
+def render_active_upload_state() -> None:
+    shared = current_uploaded_creative()
+    st.divider()
+    st.markdown("**Active Upload**")
+    if not shared:
+        st.caption("Upload once in any tab, then reuse it from Current upload.")
+        return
+
+    st.success("Ready across tabs")
+    st.caption(f"{shared['name']} is retained for this browser session.")
+    if st.button("Clear active upload", key="clear_active_upload", use_container_width=True):
+        st.session_state.pop(SHARED_CREATIVE_KEY, None)
+        st.rerun()
+
+
+def current_uploaded_creative() -> dict | None:
+    shared = st.session_state.get(SHARED_CREATIVE_KEY)
+    if not shared or not shared.get("bytes"):
+        return None
+    return shared
+
+
+def remember_uploaded_creative(name: str, file_bytes: bytes) -> None:
+    st.session_state[SHARED_CREATIVE_KEY] = {
+        "name": name,
+        "bytes": file_bytes,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def remember_uploaded_file_widget(upload_key: str) -> None:
+    uploaded = st.session_state.get(upload_key)
+    if uploaded is not None:
+        remember_uploaded_creative(uploaded.name, uploaded.getvalue())
+
+
+def creative_picker(
+    label: str,
+    key: str,
+    default_kind: str,
+    prefer_current_upload: bool = True,
+) -> tuple[str, bytes | None]:
+    shared = current_uploaded_creative()
+    if shared and prefer_current_upload:
+        source_options = ["Current upload", "Sample", "Upload"]
+    elif shared:
+        source_options = ["Sample", "Upload", "Current upload"]
+    else:
+        source_options = ["Sample", "Upload"]
+
+    mode_key = f"{key}_mode"
+    upload_seen_key = f"{key}_active_upload_seen"
+    if shared and prefer_current_upload and st.session_state.get(upload_seen_key) != shared["name"]:
+        st.session_state[mode_key] = "Current upload"
+        st.session_state[upload_seen_key] = shared["name"]
+    elif st.session_state.get(mode_key) not in source_options:
+        st.session_state[mode_key] = source_options[0]
+
     mode = st.radio(
         f"{label} source",
-        ["Sample", "Upload"],
+        source_options,
         horizontal=True,
-        key=f"{key}_mode",
+        key=mode_key,
     )
+    if mode == "Current upload" and shared:
+        st.caption(f"Using active upload from this session: {shared['name']}")
+        return shared["name"], shared["bytes"]
+
     if mode == "Sample":
         labels = list(SAMPLE_CREATIVES)
         default_label = next(
@@ -624,14 +703,20 @@ def creative_picker(label: str, key: str, default_kind: str) -> tuple[str, bytes
         )
         return selected, sample_creative_bytes(SAMPLE_CREATIVES[selected])
 
+    upload_key = f"{key}_upload"
     uploaded = st.file_uploader(
         f"Upload {label} JPG or PNG",
         type=["jpg", "jpeg", "png"],
-        key=f"{key}_upload",
+        key=upload_key,
+        on_change=remember_uploaded_file_widget,
+        args=(upload_key,),
     )
     if uploaded is None:
         return label, None
-    return uploaded.name, uploaded.getvalue()
+    uploaded_bytes = uploaded.getvalue()
+    remember_uploaded_creative(uploaded.name, uploaded_bytes)
+    st.caption(f"Saved as active upload for this session: {uploaded.name}")
+    return uploaded.name, uploaded_bytes
 
 
 def analyze_creative(
@@ -1851,7 +1936,37 @@ def inject_theme() -> None:
             display: grid;
             grid-template-columns: minmax(260px, .9fr) minmax(0, 1.7fr);
             gap: 12px;
+            margin: 0 0 12px 0;
+        }
+        .nl-edge {
+            display: grid;
+            grid-template-columns: minmax(260px, .75fr) minmax(0, 1.55fr);
+            gap: 12px;
+            align-items: center;
+            border: 1px solid #AEDCC7;
+            border-radius: 8px;
+            background: #F5FBF8;
+            padding: 14px 16px;
             margin: 0 0 18px 0;
+        }
+        .nl-edge span {
+            display: block;
+            color: #C75E00;
+            font-size: .78rem;
+            font-weight: 800;
+            letter-spacing: 0;
+            text-transform: uppercase;
+        }
+        .nl-edge strong {
+            display: block;
+            color: #102F3B;
+            font-size: 1.02rem;
+            margin-top: 4px;
+        }
+        .nl-edge p {
+            margin: 0;
+            color: #365966;
+            line-height: 1.42;
         }
         .nl-workflow-intro,
         .nl-tab-intro,
@@ -2103,6 +2218,9 @@ def inject_theme() -> None:
                 grid-template-columns: 1fr;
             }
             .nl-workflow {
+                grid-template-columns: 1fr;
+            }
+            .nl-edge {
                 grid-template-columns: 1fr;
             }
             .nl-workflow-steps {
