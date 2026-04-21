@@ -339,8 +339,8 @@ def render_neuromarketing_lab() -> None:
     render_tab_intro(
         title="Optional validation",
         question="Does the predicted creative response have a lightweight viewer-signal check?",
-        action="Run the built-in replay first. Try browser webcam only when camera access and network relay are available.",
-        output="Confirm the frame processor works, then compare live camera signals when the connection succeeds.",
+        action="Run the camera-free validation to confirm the frame processor works.",
+        output="Browser webcam is available only as an advanced beta because hosted WebRTC depends on network relay support.",
     )
     source_name, creative_bytes = creative_picker("Ad stimulus", "lab", default_kind="trust")
     if creative_bytes is None:
@@ -365,23 +365,28 @@ def render_neuromarketing_lab() -> None:
 
     with webcam_col:
         st.caption("Response validation")
-        validation_mode = st.radio(
-            "Validation mode",
-            ["Camera-free replay", "Browser webcam (beta)"],
-            horizontal=True,
-            key="lab_validation_mode",
+        st.info(
+            "Use this as the reliable demo path. It runs the same OpenCV facial telemetry processor "
+            "without asking for camera permission or depending on hosted WebRTC transport."
         )
+        render_camera_replay_panel(expanded=True, primary=True)
+        render_browser_webcam_beta()
 
-        if validation_mode == "Camera-free replay":
-            st.info(
-                "Use this for reliable demos. It runs the same OpenCV facial telemetry processor "
-                "without depending on browser camera permissions or hosted WebRTC relay."
-            )
-            render_camera_replay_panel(expanded=True, primary=True)
-        else:
+
+def render_browser_webcam_beta() -> None:
+    with st.expander("Advanced: browser webcam beta", expanded=False):
+        st.caption(
+            "This mode is optional. It may keep connecting on hosted deployments unless the network allows WebRTC relay traffic."
+        )
+        enable_webcam = st.toggle(
+            "Try live browser webcam",
+            value=False,
+            key="enable_browser_webcam_beta",
+        )
+        if enable_webcam:
             st.warning(
-                "Browser webcam is optional and network-dependent. If it keeps connecting, switch back to "
-                "Camera-free replay so the lab still produces a validation output."
+                "If this keeps connecting, turn it off and use the camera-free validation above. "
+                "The core creative preflight workflow does not depend on live webcam transport."
             )
             ctx = webrtc_streamer(
                 key="neuromarketing-lab",
@@ -396,6 +401,8 @@ def render_neuromarketing_lab() -> None:
 
             render_live_metrics_fragment(ctx)
             render_camera_replay_panel(expanded=not ctx.state.playing)
+        else:
+            st.caption("Live browser webcam is off. The reliable validation path above remains available.")
 
 
 def render_live_metrics_fragment(ctx) -> None:
