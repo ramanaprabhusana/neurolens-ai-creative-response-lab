@@ -86,6 +86,7 @@ def main() -> None:
     )
     render_workflow_guide()
     render_competition_edge()
+    render_use_case_fit()
 
     tab_audit, tab_doctor, tab_ab, tab_simulator, tab_lab = st.tabs(
         ["Audit", "Fix Recommendations", "Compare Ads", "Forecast Impact", "Live Response Lab"]
@@ -334,10 +335,10 @@ def render_campaign_simulator() -> None:
 def render_neuromarketing_lab() -> None:
     st.subheader("Live Response Lab")
     render_tab_intro(
-        title="Validate with optional live response",
-        question="Do predicted creative signals align with a real viewer response?",
-        action="Choose a stimulus and optionally start the webcam.",
-        output="Compare prediction metrics with frame-by-frame facial telemetry when camera access is available.",
+        title="Validate the response signal",
+        question="Does the predicted creative response have a reality check?",
+        action="Run the built-in replay first. Try browser webcam only when camera access and network relay are available.",
+        output="Confirm the frame processor works, then compare live camera signals when the connection succeeds.",
     )
     source_name, creative_bytes = creative_picker("Ad stimulus", "lab", default_kind="trust")
     if creative_bytes is None:
@@ -361,20 +362,38 @@ def render_neuromarketing_lab() -> None:
         render_audit_download(source_name, predicted, key="lab_prediction_report")
 
     with webcam_col:
-        st.caption("Live response telemetry")
-        ctx = webrtc_streamer(
-            key="neuromarketing-lab",
-            mode=WebRtcMode.SENDONLY,
-            video_processor_factory=EmotionVideoProcessor,
-            media_stream_constraints={"video": True, "audio": False},
-            rtc_configuration=webrtc_rtc_configuration(),
-            async_processing=True,
-            sendback_audio=False,
-            video_html_attrs={"autoPlay": True, "controls": True, "muted": True},
+        st.caption("Response validation")
+        validation_mode = st.radio(
+            "Validation mode",
+            ["Camera-free replay", "Browser webcam (beta)"],
+            horizontal=True,
+            key="lab_validation_mode",
         )
 
-        render_live_metrics_fragment(ctx)
-        render_camera_replay_panel(expanded=not ctx.state.playing)
+        if validation_mode == "Camera-free replay":
+            st.info(
+                "Use this for reliable demos. It runs the same OpenCV facial telemetry processor "
+                "without depending on browser camera permissions or hosted WebRTC relay."
+            )
+            render_camera_replay_panel(expanded=True, primary=True)
+        else:
+            st.warning(
+                "Browser webcam is optional and network-dependent. If it keeps connecting, switch back to "
+                "Camera-free replay so the lab still produces a validation output."
+            )
+            ctx = webrtc_streamer(
+                key="neuromarketing-lab",
+                mode=WebRtcMode.SENDONLY,
+                video_processor_factory=EmotionVideoProcessor,
+                media_stream_constraints={"video": True, "audio": False},
+                rtc_configuration=webrtc_rtc_configuration(),
+                async_processing=True,
+                sendback_audio=False,
+                video_html_attrs={"autoPlay": True, "controls": True, "muted": True},
+            )
+
+            render_live_metrics_fragment(ctx)
+            render_camera_replay_panel(expanded=not ctx.state.playing)
 
 
 def render_live_metrics_fragment(ctx) -> None:
@@ -401,17 +420,29 @@ if hasattr(st, "fragment"):
     render_live_metrics_fragment = st.fragment(run_every="1s")(render_live_metrics_fragment)
 
 
-def render_camera_replay_panel(expanded: bool = False) -> None:
-    with st.expander("Camera test and diagnostics", expanded=expanded):
-        st.warning(
-            "If the hosted webcam connection keeps spinning, run this replay test. "
-            "It uses the same OpenCV processor as the live stream, without requiring browser camera transport."
-        )
-        st.caption(
-            "Real webcam mode still runs through streamlit-webrtc above. On hosted deployments, stable live video may require private TURN credentials."
-        )
+def render_camera_replay_panel(expanded: bool = False, primary: bool = False) -> None:
+    title = "No-camera response validation" if primary else "Camera test and diagnostics"
+    with st.expander(title, expanded=expanded):
+        if primary:
+            st.markdown(
+                """
+                - Validates that the live frame processor can detect a face.
+                - Produces Surprise, Confusion/Anger, and Engagement metrics.
+                - Works even when hosted webcam transport is blocked.
+                """
+            )
+        else:
+            st.warning(
+                "If the hosted webcam connection keeps spinning, run this replay test. "
+                "It uses the same OpenCV processor as the live stream, without requiring browser camera transport."
+            )
+            st.caption(
+                "Real webcam mode still runs through streamlit-webrtc above. On hosted deployments, stable live video may require private TURN credentials."
+            )
 
-        if st.button("Run built-in face telemetry replay", key="camera_replay_test", width="stretch"):
+        button_label = "Run no-camera response validation" if primary else "Run built-in face telemetry replay"
+        button_key = "camera_replay_test_primary" if primary else "camera_replay_test_fallback"
+        if st.button(button_label, key=button_key, width="stretch"):
             with st.spinner("Processing replay frames through the live telemetry callback..."):
                 metrics, overlay = run_camera_replay_test()
             st.session_state["camera_replay_metrics"] = metrics
@@ -427,7 +458,9 @@ def render_camera_replay_panel(expanded: bool = False) -> None:
                 caption="Built-in face replay processed by the live OpenCV callback",
                 width="stretch",
             )
-            st.caption("Replay mode is a diagnostic fallback. A real webcam session still uses streamlit-webrtc above.")
+            st.caption(
+                "This validates the biometric processor path. Browser webcam mode remains available as an optional live transport."
+            )
 
 
 def run_camera_replay_test() -> tuple[dict, np.ndarray]:
@@ -551,6 +584,31 @@ def render_competition_edge() -> None:
                 <strong>It closes the loop from creative diagnosis to a usable fix.</strong>
             </div>
             <p>Most audit tools stop at scores. NeuroLens keeps the uploaded ad in the workflow, explains what is hurting performance, generates a recommended creative direction, gives a downloadable visual cue and edit brief, then lets the user forecast and validate the response.</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_use_case_fit() -> None:
+    st.markdown(
+        """
+        <section class="nl-use-fit">
+            <div>
+                <span>Best used for</span>
+                <strong>Pre-launch creative decisions</strong>
+                <p>Before spending ad budget, use NeuroLens to find visual clutter, weak attention paths, poor contrast, and unclear emotional cues.</p>
+            </div>
+            <div>
+                <span>Useful outputs</span>
+                <strong>Fix brief, creative direction, and A/B priority</strong>
+                <p>The strongest value is turning a creative audit into a concrete edit plan that a marketer, designer, or founder can act on quickly.</p>
+            </div>
+            <div>
+                <span>Not meant for</span>
+                <strong>Guaranteed performance prediction</strong>
+                <p>It is a decision-support tool, not a replacement for real campaign tests, clinical emotion detection, or platform conversion data.</p>
+            </div>
         </section>
         """,
         unsafe_allow_html=True,
@@ -1968,6 +2026,38 @@ def inject_theme() -> None:
             color: #365966;
             line-height: 1.42;
         }
+        .nl-use-fit {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            margin: 0 0 18px 0;
+        }
+        .nl-use-fit div {
+            border: 1px solid #DCE8EC;
+            border-radius: 8px;
+            background: #FFFFFF;
+            padding: 14px;
+        }
+        .nl-use-fit span {
+            display: block;
+            color: #C75E00;
+            font-size: .78rem;
+            font-weight: 800;
+            letter-spacing: 0;
+            text-transform: uppercase;
+        }
+        .nl-use-fit strong {
+            display: block;
+            color: #102F3B;
+            font-size: 1rem;
+            margin-top: 5px;
+        }
+        .nl-use-fit p {
+            margin: 7px 0 0 0;
+            color: #4D6873;
+            font-size: .9rem;
+            line-height: 1.38;
+        }
         .nl-workflow-intro,
         .nl-tab-intro,
         .nl-fix-summary {
@@ -2221,6 +2311,9 @@ def inject_theme() -> None:
                 grid-template-columns: 1fr;
             }
             .nl-edge {
+                grid-template-columns: 1fr;
+            }
+            .nl-use-fit {
                 grid-template-columns: 1fr;
             }
             .nl-workflow-steps {
