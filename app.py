@@ -115,7 +115,7 @@ def render_visual_asset_audit() -> None:
         title="Start here",
         question="Is this ad ready to spend money on?",
         action="Upload a JPG/PNG or choose a sample creative.",
-        output="Get launch guidance, risk signals, a heatmap, and concrete edits to make before testing.",
+        output="Get launch guidance, risk signals, an attention overlay, and concrete edits to make before testing.",
     )
     source_name, creative_bytes = creative_picker("Ad creative", "audit", default_kind="focused")
     if creative_bytes is None:
@@ -123,12 +123,13 @@ def render_visual_asset_audit() -> None:
         return
 
     heatmap_alpha = st.slider(
-        "Heatmap overlay opacity",
+        "Attention overlay visibility",
         min_value=0.25,
         max_value=0.75,
         value=0.50,
         step=0.05,
         key="audit_heatmap_alpha",
+        help="Controls how strongly the estimated attention map is shown over the original ad.",
     )
     audit = analyze_creative(creative_bytes, source_name, heatmap_alpha=heatmap_alpha)
     if audit is None:
@@ -143,7 +144,7 @@ def render_visual_asset_audit() -> None:
     left, right = st.columns([1.05, 0.95], vertical_alignment="top")
     with left:
         st.image(image, caption=f"{source_name} creative", width="stretch")
-        st.image(heatmap, caption="Simulated attention heatmap", width="stretch")
+        st.image(heatmap, caption="Estimated attention overlay", width="stretch")
         render_heatmap_download(heatmap, source_name, key="audit_heatmap")
         if accessibility is not None:
             _, accessibility_overlay = accessibility
@@ -250,19 +251,20 @@ def render_ab_predictor() -> None:
         return
 
     heatmap_alpha = st.slider(
-        "Heatmap overlay opacity",
+        "Attention overlay visibility",
         min_value=0.25,
         max_value=0.75,
         value=0.50,
         step=0.05,
         key="ab_heatmap_alpha",
+        help="Controls how strongly the estimated attention map is shown over each ad.",
     )
     with st.spinner("Comparing creative performance signals..."):
         score_a = get_cached_score(bytes_a, "Ad A Visual Analysis")
         score_b = get_cached_score(bytes_b, "Ad B Visual Analysis")
         comparison = compare_score_dicts(score_a, score_b)
-        heatmap_a = get_cached_heatmap(bytes_a, heatmap_alpha, "Ad A Saliency Heatmap")
-        heatmap_b = get_cached_heatmap(bytes_b, heatmap_alpha, "Ad B Saliency Heatmap")
+        heatmap_a = get_cached_heatmap(bytes_a, heatmap_alpha, "Ad A Attention Overlay")
+        heatmap_b = get_cached_heatmap(bytes_b, heatmap_alpha, "Ad B Attention Overlay")
 
     st.success(
         f"Predicted Winner: {comparison['winner']} - "
@@ -284,34 +286,37 @@ def render_campaign_simulator() -> None:
         title="Model the business effect",
         question="How might clutter, attention, and color direction affect CPC and conversion rate?",
         action="Move the sliders to test a creative scenario.",
-        output="Watch the CPC/CVR forecast, audience-fit radar, and edit plan update immediately.",
+        output="Watch the cost-per-click forecast, conversion-rate forecast, audience-fit radar, and edit plan update immediately.",
     )
     st.caption("Run a stateless what-if model before changing the creative file.")
 
     input_col, output_col = st.columns([0.9, 1.1], vertical_alignment="top")
     with input_col:
         simulated_clutter = st.slider(
-            "Simulated Clutter (Entropy)",
+            "Visual Clutter Score",
             min_value=10,
             max_value=100,
             value=48,
             step=1,
             key="simulated_clutter",
+            help="Estimates how hard the ad is to scan. Scores above 75 can create cognitive overload.",
         )
         saliency_alignment = st.slider(
-            "Saliency Grid Alignment",
+            "Attention on Key Message",
             min_value=0,
             max_value=100,
             value=72,
             step=1,
             format="%d%%",
             key="simulated_saliency",
+            help="Estimates whether attention is landing near the message, product, or call-to-action.",
         )
         color_emotion = st.selectbox(
-            "Dominant Color Psychology",
+            "Dominant Color Strategy",
             COLOR_EMOTION_OPTIONS,
             index=COLOR_EMOTION_OPTIONS.index("Action/Urgency"),
             key="simulated_color_emotion",
+            help="Select the main emotional role of the creative's dominant color direction.",
         )
 
     forecast = calculate_kpi_forecast(simulated_clutter, saliency_alignment, color_emotion)
@@ -319,19 +324,96 @@ def render_campaign_simulator() -> None:
         "clutter": simulated_clutter,
         "focus_score": saliency_alignment,
         "emotion_score": simulator_emotion_score(color_emotion),
+        "color_emotion": color_emotion,
         "colors": [],
     }
 
     with output_col:
         cols = st.columns(3)
-        cols[0].metric("Predicted CPC", forecast["predicted_cpc"])
-        cols[1].metric("Predicted CVR", forecast["predicted_conversion_rate"])
-        cols[2].metric("Color Segment", forecast["color_emotion"])
+        cols[0].metric(
+            "Predicted CPC",
+            forecast["predicted_cpc"],
+            help="Estimated cost per click after applying the creative-quality scenario.",
+        )
+        cols[1].metric(
+            "Predicted conversion rate",
+            forecast["predicted_conversion_rate"],
+            help="Estimated conversion rate after applying attention and color-strategy signals.",
+        )
+        cols[2].metric(
+            "Color strategy",
+            forecast["color_emotion"],
+            help="The business role assigned to the dominant color direction.",
+        )
+        render_budget_forecast_explanation(simulated_clutter, saliency_alignment, color_emotion, forecast)
         st.plotly_chart(
             generate_persona_radar(simulated_clutter, color_emotion),
             width="stretch",
         )
         render_micro_edit_prescriptions(simulator_results, heading="What-if edit plan")
+
+
+def render_budget_forecast_explanation(
+    clutter: int,
+    attention: int,
+    color_emotion: str,
+    forecast: dict,
+) -> None:
+    explanation = budget_forecast_explanation(clutter, attention, color_emotion)
+    st.info(
+        f"{explanation} Current scenario: {forecast['predicted_cpc']} CPC and "
+        f"{forecast['predicted_conversion_rate']} conversion rate."
+    )
+
+
+def budget_forecast_explanation(clutter: int, attention: int, color_emotion: str) -> str:
+    reasons: list[str] = []
+    color_strategy = normalize_color_emotion(color_emotion)
+
+    if clutter < 40:
+        reasons.append(
+            "Lower visual clutter reduces scanning effort, which can lower CPC in fast-scroll placements."
+        )
+    elif clutter > 75:
+        reasons.append(
+            "High visual clutter adds friction, so the model raises CPC risk and slightly reduces conversion confidence."
+        )
+    else:
+        reasons.append(
+            "Moderate visual clutter keeps the creative readable without assuming a major CPC penalty or discount."
+        )
+
+    if attention > 80:
+        reasons.append(
+            "Strong attention on the key message improves the conversion-rate estimate because the CTA is easier to notice."
+        )
+    elif attention < 45:
+        reasons.append(
+            "Weak attention on the key message lowers the conversion-rate estimate because users may miss the offer."
+        )
+    else:
+        reasons.append(
+            "Balanced attention keeps the forecast close to baseline until the CTA becomes much clearer or more hidden."
+        )
+
+    if color_strategy == "Action/Urgency":
+        reasons.append(
+            "An action-oriented color can lift conversion intent, but it may also make clicks slightly more competitive."
+        )
+    elif color_strategy in {"Trust/Stability", "Growth/Reassurance"}:
+        reasons.append(
+            "A trust-oriented color direction supports conversion confidence without adding urgency pressure."
+        )
+    elif color_strategy == "Neutral/Clarity":
+        reasons.append(
+            "A neutral color direction protects readability, but it may need a stronger CTA accent for acquisition campaigns."
+        )
+    else:
+        reasons.append(
+            "A premium color direction can support aspiration, but it may not behave like a low-cost response driver."
+        )
+
+    return " ".join(reasons)
 
 
 def render_neuromarketing_lab() -> None:
@@ -359,7 +441,11 @@ def render_neuromarketing_lab() -> None:
         prediction_cols = st.columns(3)
         prediction_cols[0].metric("Clutter", f"{predicted['clutter']}/100")
         prediction_cols[1].metric("Emotion Fit", f"{predicted['emotion_score']}/100")
-        prediction_cols[2].metric("Saliency", f"{predicted['focus_score']}/100")
+        prediction_cols[2].metric(
+            "Attention Focus",
+            f"{predicted['focus_score']}/100",
+            help="Estimates whether the viewer's attention is likely to land near the key message or CTA.",
+        )
         render_recommendations(predicted)
         render_audit_download(source_name, predicted, key="lab_prediction_report")
 
@@ -552,11 +638,11 @@ def render_sidebar() -> None:
         with st.expander("Model methodology"):
             st.markdown(
                 """
-                - Clutter: Shannon entropy normalized to a 1-100 scale.
-                - Saliency: OpenCV edges plus local contrast, blurred into a simulated heatmap.
-                - Color psychology: K-Means dominant colors mapped to nearest psychology labels.
-                - Budget Forecast: deterministic mock CPC/CVR rules, not ad-platform estimates.
-                - Persona matrix: clutter and color-temperature mapping to audience-fit scores.
+                - Visual clutter: how busy the ad feels at a glance, scored from 1-100.
+                - Attention overlay: where contrast and visual detail are likely to pull the eye first.
+                - Dominant color profile: the top visible colors and their likely marketing role.
+                - Budget Forecast: deterministic mock cost-per-click and conversion-rate rules, not ad-platform estimates.
+                - Audience fit: clutter and color direction mapped to likely buyer segments.
                 - Optional viewer signal: latest-frame face-region heuristics only.
                 """
             )
@@ -575,7 +661,7 @@ def render_workflow_guide() -> None:
                 <div><span>1</span><strong>Audit</strong><small>Decide launch, edit, or test.</small></div>
                 <div><span>2</span><strong>Fix Brief</strong><small>Get a cue, direction, and edit brief.</small></div>
                 <div><span>3</span><strong>Compare</strong><small>Pick the stronger variant.</small></div>
-                <div><span>4</span><strong>Forecast</strong><small>Estimate CPC/CVR movement.</small></div>
+                <div><span>4</span><strong>Forecast</strong><small>Estimate cost and conversion movement.</small></div>
                 <div><span>5</span><strong>Signal</strong><small>Optional viewer-signal check.</small></div>
             </div>
         </section>
@@ -799,7 +885,7 @@ def analyze_creative(
             return image, get_cached_score(file_bytes, "Visual Analysis"), get_cached_heatmap(
                 file_bytes,
                 heatmap_alpha,
-                "Saliency Heatmap",
+                "Attention Overlay",
             )
     except (cv2.error, ValueError, RuntimeError) as exc:
         st.error("The image loaded, but the computer vision audit could not process it safely.")
@@ -1008,14 +1094,26 @@ def sample_creative_bytes(kind: str) -> bytes:
 
 def render_audit_metrics(results: dict) -> None:
     cols = st.columns(3)
-    cols[0].metric("Visual Clutter", f"{results['clutter']}/100", help="Derived from Shannon entropy.")
-    cols[1].metric("Entropy", f"{results['entropy']:.2f}")
-    cols[2].metric("Central Saliency", f"{results['focus_score']}/100")
+    cols[0].metric(
+        "Visual Clutter Score",
+        f"{results['clutter']}/100",
+        help="Measures how hard the human brain has to work to process the ad. Scores above 75 suggest risky visual overload.",
+    )
+    cols[1].metric(
+        "Image Complexity",
+        f"{results['entropy']:.2f}",
+        help="A technical scan of image variety that feeds the clutter score. Higher values usually mean busier creative.",
+    )
+    cols[2].metric(
+        "Attention Focus",
+        f"{results['focus_score']}/100",
+        help="Estimates whether visual attention is likely to land near the main message, product, or CTA.",
+    )
 
     if results["clutter"] > 75:
-        st.warning("High cognitive load detected. Simplify competing detail or strengthen visual hierarchy.")
+        st.warning("High visual overload detected. Simplify competing detail or strengthen the main CTA hierarchy.")
     else:
-        st.success("Cognitive load is within the recommended operating range.")
+        st.success("Visual load is within a usable range for a paid test.")
 
 
 def render_primary_decision(results: dict) -> None:
@@ -1069,10 +1167,26 @@ def render_scorecard(label: str, score: dict) -> None:
 
 def render_doctor_delta(original_score: dict, doctor_score: dict) -> None:
     cols = st.columns(4)
-    cols[0].metric("Clutter Reduced", f"{original_score['clutter'] - doctor_score['clutter']:+d}")
-    cols[1].metric("Saliency Gain", f"{doctor_score['focus_score'] - original_score['focus_score']:+.1f}")
-    cols[2].metric("Emotion Gain", f"{doctor_score['emotion_score'] - original_score['emotion_score']:+.1f}")
-    cols[3].metric("Readiness Gain", f"{doctor_score['final_score'] - original_score['final_score']:+.1f}")
+    cols[0].metric(
+        "Clutter change",
+        f"{original_score['clutter'] - doctor_score['clutter']:+d}",
+        help="Positive values mean the recommended direction is easier to scan.",
+    )
+    cols[1].metric(
+        "Attention gain",
+        f"{doctor_score['focus_score'] - original_score['focus_score']:+.1f}",
+        help="Positive values mean the recommended direction pulls more attention toward the main action area.",
+    )
+    cols[2].metric(
+        "Color-fit gain",
+        f"{doctor_score['emotion_score'] - original_score['emotion_score']:+.1f}",
+        help="Positive values mean the color direction better matches the intended marketing response.",
+    )
+    cols[3].metric(
+        "Readiness gain",
+        f"{doctor_score['final_score'] - original_score['final_score']:+.1f}",
+        help="Positive values mean the recommendation is a stronger candidate for a controlled test.",
+    )
 
 
 def render_fix_output_summary(original_score: dict, doctor_score: dict) -> None:
@@ -1143,7 +1257,7 @@ def fix_improvement_reasons(original_score: dict, doctor_score: dict) -> list[st
         reasons.append("The direction keeps visual density controlled while reorganizing the hierarchy around the main action.")
 
     if saliency_delta > 0:
-        reasons.append(f"Central saliency improves by {saliency_delta:.1f} points, so attention is more likely to land on the conversion cue.")
+        reasons.append(f"Attention focus improves by {saliency_delta:.1f} points, so attention is more likely to land on the conversion cue.")
     elif original_score["focus_score"] >= 60:
         reasons.append("The original already has healthy central attention, so the direction preserves that focal path.")
 
@@ -1164,8 +1278,54 @@ def render_recommendations(results: dict) -> None:
 
 
 def render_micro_edit_prescriptions(results: dict, heading: str = "Specific edit ideas") -> None:
-    st.markdown(f"**{heading}**")
-    st.markdown("\n".join(f"- {instruction}" for instruction in micro_edit_prescriptions(results)))
+    steps = actionable_micro_edit_steps(results)
+    st.markdown(
+        f"""
+        <div class="nl-action-box">
+            <span>{heading}</span>
+            <strong>Make these edits before the next paid test</strong>
+            <ol>
+                {''.join(f'<li>{step}</li>' for step in steps)}
+            </ol>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def actionable_micro_edit_steps(results: dict) -> list[str]:
+    clutter = int(results.get("clutter", 50))
+    focus = float(results.get("focus_score", 50))
+    emotion = float(results.get("emotion_score", 50))
+    color_strategy = results.get("color_emotion")
+    if color_strategy:
+        color_strategy = normalize_color_emotion(str(color_strategy))
+    else:
+        color_strategy = dominant_color_emotion(results)
+
+    steps: list[str] = []
+    if clutter > 75:
+        steps.append("Remove or mute background texture, secondary badges, and non-essential copy until visual clutter is below 65.")
+    elif clutter > 55:
+        steps.append("Group secondary details into one proof point so the CTA and offer become the fastest elements to understand.")
+    elif clutter < 35:
+        steps.append("Keep the clean layout, but add one compact proof point if the offer needs more credibility.")
+    else:
+        steps.append("Keep the current visual density and use spacing, size, or contrast to improve hierarchy before deleting content.")
+
+    if focus < 55:
+        steps.append("Move the CTA, offer, or product cue into the central attention zone and increase its contrast against the background.")
+    else:
+        steps.append("Protect the current focal path by making edits around the edges instead of crowding the main action area.")
+
+    if (emotion < 30 or color_strategy == "Neutral/Clarity") and color_strategy != "Action/Urgency":
+        steps.append("Add a small warm/action accent to the primary CTA so the next click target feels more intentional.")
+    elif color_strategy == "Action/Urgency" and clutter > 70:
+        steps.append("Keep the action color on the CTA, but remove one competing warm element so urgency points to one action only.")
+    else:
+        steps.append("Preserve the dominant color cue and test copy or CTA placement before making broad palette changes.")
+
+    return steps[:3]
 
 
 def render_business_forecast(results: dict) -> None:
@@ -1173,18 +1333,42 @@ def render_business_forecast(results: dict) -> None:
     forecast = calculate_kpi_forecast(results["clutter"], results["focus_score"], color_emotion)
     st.markdown("**Forecast preview**")
     cols = st.columns(2)
-    cols[0].metric("Predicted CPC", forecast["predicted_cpc"])
-    cols[1].metric("Predicted CVR", forecast["predicted_conversion_rate"])
-    st.caption(f"Baseline adjusted from $2.50 CPC and 1.5% CVR using {forecast['color_emotion']} cues.")
+    cols[0].metric(
+        "Predicted CPC",
+        forecast["predicted_cpc"],
+        help="Estimated cost per click after applying this creative's clutter, attention, and color signals.",
+    )
+    cols[1].metric(
+        "Predicted conversion rate",
+        forecast["predicted_conversion_rate"],
+        help="Estimated conversion rate after applying this creative's attention and color-strategy signals.",
+    )
+    st.caption(f"Baseline adjusted from $2.50 CPC and 1.5% conversion rate using {forecast['color_emotion']} cues.")
 
 
 def render_accessibility_panel(accessibility) -> None:
     st.markdown("**Accessibility & platform risk scanner**")
     cols = st.columns(4)
-    cols[0].metric("Access Score", f"{accessibility.score}/100")
-    cols[1].metric("WCAG", accessibility.wcag_status)
-    cols[2].metric("Contrast", f"{accessibility.contrast_ratio}:1")
-    cols[3].metric("Risk Pixels", f"{accessibility.risk_pixels:.1f}%")
+    cols[0].metric(
+        "Accessibility score",
+        f"{accessibility.score}/100",
+        help="Summarizes how readable the ad is likely to be for users with contrast or vision limitations.",
+    )
+    cols[1].metric(
+        "Readability status",
+        accessibility.wcag_status,
+        help="Shows whether the estimated foreground and background contrast meets common web readability guidance.",
+    )
+    cols[2].metric(
+        "Color contrast",
+        f"{accessibility.contrast_ratio}:1",
+        help="Higher contrast makes text and CTA elements easier to read.",
+    )
+    cols[3].metric(
+        "At-risk area",
+        f"{accessibility.risk_pixels:.1f}%",
+        help="Estimated share of the creative that may have low-contrast readability risk.",
+    )
     st.markdown(
         f"""
         <div class="nl-contrast-pair">
@@ -1237,7 +1421,7 @@ def render_winner_rationale(comparison: dict) -> None:
     if winner["emotion_score"] >= loser["emotion_score"]:
         reasons.append("stronger target emotion fit")
     if winner["focus_score"] >= loser["focus_score"]:
-        reasons.append("stronger central saliency")
+        reasons.append("stronger attention focus")
     if not reasons:
         reasons.append("a better blended model score")
 
@@ -1305,10 +1489,10 @@ def render_audit_download(source_name: str, results: dict, key: str, accessibili
             dominant_color_emotion(results),
         ),
         "model_notes": [
-            "Visual clutter is derived from Shannon entropy over grayscale luminance.",
-            "Attention heatmap is simulated from OpenCV edge and contrast signals.",
+            "Visual clutter is derived from image-complexity patterns in the creative.",
+            "The attention overlay is simulated from edge and contrast signals.",
             "Color psychology uses nearest-color matching against a predefined dictionary.",
-            "Budget Forecast uses mock CPC/CVR rules for scenario planning.",
+            "Budget Forecast uses mock cost-per-click and conversion-rate rules for scenario planning.",
         ],
     }
     if accessibility is not None:
@@ -1401,7 +1585,7 @@ def edit_brief_markdown(source_name: str, original_score: dict, doctor_score: di
         f"- Original creative: grade {original_grade}. {original_launch}",
         f"- Recommended direction: grade {doctor_grade}. {doctor_launch}",
         f"- Clutter: {original_score['clutter']}/100 -> {doctor_score['clutter']}/100",
-        f"- Central saliency: {original_score['focus_score']}/100 -> {doctor_score['focus_score']}/100",
+        f"- Attention focus: {original_score['focus_score']}/100 -> {doctor_score['focus_score']}/100",
         f"- Emotion fit: {original_score['emotion_score']}/100 -> {doctor_score['emotion_score']}/100",
         "",
         "## Preferred Visual Cue",
@@ -1500,7 +1684,7 @@ def winner_reason_list(comparison: dict) -> list[str]:
     if winner["emotion_score"] >= loser["emotion_score"]:
         reasons.append("stronger target emotion fit")
     if winner["focus_score"] >= loser["focus_score"]:
-        reasons.append("stronger central saliency")
+        reasons.append("stronger attention focus")
     return reasons or ["better blended model score"]
 
 
@@ -1528,15 +1712,22 @@ def safe_slug(value: str) -> str:
 
 
 def render_color_chart(colors) -> None:
-    rows = colors_to_plotly_rows(colors)
+    rows = [
+        {
+            "Color": row["Color"],
+            "Creative Share": row["Share"],
+            "Marketing Meaning": row["Psychology"],
+        }
+        for row in colors_to_plotly_rows(colors)
+    ]
     fig = px.bar(
         rows,
         x="Color",
-        y="Share",
+        y="Creative Share",
         color="Color",
         color_discrete_map={row["Color"]: row["Color"] for row in rows},
-        text="Psychology",
-        title="Top Dominant Colors and Psychological Associations",
+        text="Marketing Meaning",
+        title="Dominant Color Profile and Marketing Meaning",
         range_y=[0, 100],
     )
     fig.update_layout(showlegend=False, height=380, margin=dict(l=20, r=20, t=70, b=20))
@@ -1561,16 +1752,28 @@ def render_ad_score(column, label: str, source_name: str, image: Image.Image, sc
     with column:
         st.image(image, caption=f"{label}: {source_name}", width="stretch")
         metric_cols = st.columns(3)
-        metric_cols[0].metric("Final", score["final_score"])
-        metric_cols[1].metric("Clutter", score["clutter"])
-        metric_cols[2].metric("Emotion", score["emotion_score"])
-        st.image(heatmap, caption=f"{label} heatmap", width="stretch")
+        metric_cols[0].metric(
+            "Readiness",
+            score["final_score"],
+            help="Blended score that combines scan clarity, color fit, and attention focus.",
+        )
+        metric_cols[1].metric(
+            "Visual clutter",
+            score["clutter"],
+            help="Higher scores mean the ad is harder to scan quickly.",
+        )
+        metric_cols[2].metric(
+            "Color fit",
+            score["emotion_score"],
+            help="How strongly the dominant colors support action, trust, growth, or premium positioning.",
+        )
+        st.image(heatmap, caption=f"{label} attention overlay", width="stretch")
         render_heatmap_download(heatmap, f"{label}_{source_name}", key=f"{label.lower().replace(' ', '_')}_heatmap")
 
 
 def render_heatmap_download(heatmap: np.ndarray, source_name: str, key: str) -> None:
     st.download_button(
-        "Download heatmap PNG",
+        "Download attention overlay PNG",
         data=image_array_to_png_bytes(heatmap),
         file_name=f"neurolens_heatmap_{safe_slug(source_name)}.png",
         mime="image/png",
@@ -1876,21 +2079,21 @@ def hex_to_rgb(hex_code: str) -> tuple[int, int, int]:
 def render_ab_chart(comparison: dict) -> None:
     fig = px.bar(
         [
-            {"Ad": "Ad A", "Metric": "Final Score", "Score": comparison["ad_a"]["final_score"]},
-            {"Ad": "Ad A", "Metric": "Low Clutter", "Score": 100 - comparison["ad_a"]["clutter"]},
-            {"Ad": "Ad A", "Metric": "Emotion Fit", "Score": comparison["ad_a"]["emotion_score"]},
-            {"Ad": "Ad A", "Metric": "Central Saliency", "Score": comparison["ad_a"]["focus_score"]},
-            {"Ad": "Ad B", "Metric": "Final Score", "Score": comparison["ad_b"]["final_score"]},
-            {"Ad": "Ad B", "Metric": "Low Clutter", "Score": 100 - comparison["ad_b"]["clutter"]},
-            {"Ad": "Ad B", "Metric": "Emotion Fit", "Score": comparison["ad_b"]["emotion_score"]},
-            {"Ad": "Ad B", "Metric": "Central Saliency", "Score": comparison["ad_b"]["focus_score"]},
+            {"Ad": "Ad A", "Metric": "Creative Readiness", "Score": comparison["ad_a"]["final_score"]},
+            {"Ad": "Ad A", "Metric": "Scan Clarity", "Score": 100 - comparison["ad_a"]["clutter"]},
+            {"Ad": "Ad A", "Metric": "Color Fit", "Score": comparison["ad_a"]["emotion_score"]},
+            {"Ad": "Ad A", "Metric": "Attention Focus", "Score": comparison["ad_a"]["focus_score"]},
+            {"Ad": "Ad B", "Metric": "Creative Readiness", "Score": comparison["ad_b"]["final_score"]},
+            {"Ad": "Ad B", "Metric": "Scan Clarity", "Score": 100 - comparison["ad_b"]["clutter"]},
+            {"Ad": "Ad B", "Metric": "Color Fit", "Score": comparison["ad_b"]["emotion_score"]},
+            {"Ad": "Ad B", "Metric": "Attention Focus", "Score": comparison["ad_b"]["focus_score"]},
         ],
         x="Metric",
         y="Score",
         color="Ad",
         barmode="group",
         range_y=[0, 100],
-        title="A/B Creative Performance Model",
+        title="A/B Creative Readiness Comparison",
     )
     fig.update_layout(height=430, margin=dict(l=20, r=20, t=70, b=30))
     st.plotly_chart(fig, width="stretch")
@@ -1905,10 +2108,26 @@ def render_live_metrics(container, metrics: dict) -> None:
     }
     with container:
         cols = st.columns(4)
-        cols[0].metric("Face", "Detected" if metrics["face_detected"] else "Waiting")
-        cols[1].metric("Surprise", f"{metrics['surprise']}/100")
-        cols[2].metric("Confusion / Anger", f"{metrics['confusion_anger']}/100")
-        cols[3].metric("Engagement", f"{metrics['engagement']}/100")
+        cols[0].metric(
+            "Face signal",
+            "Detected" if metrics["face_detected"] else "Waiting",
+            help="Shows whether the frame processor can find a face in the current validation frame.",
+        )
+        cols[1].metric(
+            "Surprise signal",
+            f"{metrics['surprise']}/100",
+            help="Heuristic signal based on eye and mouth-region changes. Use as a demo signal, not a clinical reading.",
+        )
+        cols[2].metric(
+            "Friction signal",
+            f"{metrics['confusion_anger']}/100",
+            help="Heuristic signal based on brow-region contrast. Higher values may suggest tension or confusion.",
+        )
+        cols[3].metric(
+            "Engagement signal",
+            f"{metrics['engagement']}/100",
+            help="Heuristic signal based on mouth-region activity and contrast in the validation frame.",
+        )
 
 
 def create_sample_ad(kind: str) -> Image.Image:
@@ -2222,6 +2441,36 @@ def inject_theme() -> None:
         .nl-decision-risk {
             border-color: #F0B8B8;
             background: #FFF5F5;
+        }
+        .nl-action-box {
+            border: 1px solid #A8D9C0;
+            border-radius: 8px;
+            background: #F3FBF7;
+            padding: 14px 16px;
+            margin: 12px 0;
+        }
+        .nl-action-box span {
+            display: block;
+            color: #0F7A4F;
+            font-size: .78rem;
+            font-weight: 800;
+            letter-spacing: 0;
+            text-transform: uppercase;
+        }
+        .nl-action-box strong {
+            display: block;
+            color: #102F3B;
+            font-size: 1rem;
+            margin-top: 4px;
+        }
+        .nl-action-box ol {
+            margin: 10px 0 0 20px;
+            padding: 0;
+            color: #254D3E;
+            line-height: 1.42;
+        }
+        .nl-action-box li {
+            margin-bottom: 6px;
         }
         .nl-fix-summary {
             margin: 12px 0 16px 0;
