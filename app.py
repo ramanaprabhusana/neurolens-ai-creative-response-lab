@@ -362,7 +362,7 @@ def render_neuromarketing_lab() -> None:
         st.caption("Live response telemetry")
         ctx = webrtc_streamer(
             key="neuromarketing-lab",
-            mode=WebRtcMode.SENDRECV,
+            mode=WebRtcMode.SENDONLY,
             video_processor_factory=EmotionVideoProcessor,
             media_stream_constraints={"video": True, "audio": False},
             rtc_configuration=webrtc_rtc_configuration(),
