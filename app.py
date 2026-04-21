@@ -140,15 +140,15 @@ def render_visual_asset_audit() -> None:
 
     left, right = st.columns([1.05, 0.95], vertical_alignment="top")
     with left:
-        st.image(image, caption=f"{source_name} creative", use_container_width=True)
-        st.image(heatmap, caption="Simulated attention heatmap", use_container_width=True)
+        st.image(image, caption=f"{source_name} creative", width="stretch")
+        st.image(heatmap, caption="Simulated attention heatmap", width="stretch")
         render_heatmap_download(heatmap, source_name, key="audit_heatmap")
         if accessibility is not None:
             _, accessibility_overlay = accessibility
             st.image(
                 accessibility_overlay,
                 caption="Accessibility contrast risk overlay",
-                use_container_width=True,
+                width="stretch",
             )
 
     with right:
@@ -200,12 +200,12 @@ def render_creative_doctor() -> None:
 
     before_col, after_col = st.columns(2, vertical_alignment="top")
     with before_col:
-        st.image(image, caption=f"Before: {source_name}", use_container_width=True)
+        st.image(image, caption=f"Before: {source_name}", width="stretch")
         st.markdown("**Original creative diagnosis**")
         render_recommendations(original_score)
 
     with after_col:
-        st.image(doctor_image, caption="Recommended Creative Direction", use_container_width=True)
+        st.image(doctor_image, caption="Recommended Creative Direction", width="stretch")
         st.markdown("**Recommended direction guidance**")
         render_recommendations(doctor_score)
         st.download_button(
@@ -214,7 +214,7 @@ def render_creative_doctor() -> None:
             file_name=f"neurolens_doctor_{safe_slug(source_name)}.png",
             mime="image/png",
             key="doctor_png",
-            use_container_width=True,
+            width="stretch",
         )
 
     render_preferred_symbol_output(source_name, original_score, symbol_bytes)
@@ -326,7 +326,7 @@ def render_campaign_simulator() -> None:
         cols[2].metric("Color Segment", forecast["color_emotion"])
         st.plotly_chart(
             generate_persona_radar(simulated_clutter, color_emotion),
-            use_container_width=True,
+            width="stretch",
         )
         render_micro_edit_prescriptions(simulator_results, heading="What-if edit plan")
 
@@ -351,7 +351,7 @@ def render_neuromarketing_lab() -> None:
 
     ad_col, webcam_col = st.columns([1, 1], vertical_alignment="top")
     with ad_col:
-        st.image(stimulus, caption=f"{source_name} stimulus", use_container_width=True)
+        st.image(stimulus, caption=f"{source_name} stimulus", width="stretch")
         st.caption("Predicted response")
         prediction_cols = st.columns(3)
         prediction_cols[0].metric("Clutter", f"{predicted['clutter']}/100")
@@ -411,7 +411,7 @@ def render_camera_replay_panel(expanded: bool = False) -> None:
             "Real webcam mode still runs through streamlit-webrtc above. On hosted deployments, stable live video may require private TURN credentials."
         )
 
-        if st.button("Run built-in face telemetry replay", key="camera_replay_test", use_container_width=True):
+        if st.button("Run built-in face telemetry replay", key="camera_replay_test", width="stretch"):
             with st.spinner("Processing replay frames through the live telemetry callback..."):
                 metrics, overlay = run_camera_replay_test()
             st.session_state["camera_replay_metrics"] = metrics
@@ -425,7 +425,7 @@ def render_camera_replay_panel(expanded: bool = False) -> None:
             st.image(
                 overlay,
                 caption="Built-in face replay processed by the live OpenCV callback",
-                use_container_width=True,
+                width="stretch",
             )
             st.caption("Replay mode is a diagnostic fallback. A real webcam session still uses streamlit-webrtc above.")
 
@@ -631,7 +631,7 @@ def render_active_upload_state() -> None:
 
     st.success("Ready across tabs")
     st.caption(f"{shared['name']} is retained for this browser session.")
-    if st.button("Clear active upload", key="clear_active_upload", use_container_width=True):
+    if st.button("Clear active upload", key="clear_active_upload", width="stretch"):
         st.session_state.pop(SHARED_CREATIVE_KEY, None)
         st.rerun()
 
@@ -999,14 +999,14 @@ def render_preferred_symbol_output(source_name: str, score: dict, symbol_bytes: 
     st.markdown("**Preferred visual cue**")
     symbol_col, guidance_col = st.columns([0.38, 0.62], vertical_alignment="top")
     with symbol_col:
-        st.image(cached_image_from_bytes(symbol_bytes), caption=f"{spec['name']} cue", use_container_width=True)
+        st.image(cached_image_from_bytes(symbol_bytes), caption=f"{spec['name']} cue", width="stretch")
         st.download_button(
             "Download visual cue PNG",
             data=symbol_bytes,
             file_name=f"neurolens_visual_cue_{safe_slug(source_name)}.png",
             mime="image/png",
             key="doctor_visual_cue",
-            use_container_width=True,
+            width="stretch",
         )
 
     with guidance_col:
@@ -1101,7 +1101,7 @@ def render_accessibility_panel(accessibility) -> None:
 def render_persona_matrix(results: dict) -> None:
     st.plotly_chart(
         generate_persona_radar(results["clutter"], results.get("colors", [])),
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -1276,7 +1276,7 @@ def render_edit_brief_download(source_name: str, original_score: dict, doctor_sc
         file_name=f"neurolens_edit_brief_{safe_slug(source_name)}.md",
         mime="text/markdown",
         key="doctor_edit_brief",
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -1361,7 +1361,7 @@ def render_json_download(label: str, filename: str, payload: dict, key: str) -> 
         file_name=filename,
         mime="application/json",
         key=key,
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -1439,7 +1439,7 @@ def render_color_chart(colors) -> None:
     )
     fig.update_layout(showlegend=False, height=380, margin=dict(l=20, r=20, t=70, b=20))
     fig.update_traces(textposition="outside", cliponaxis=False)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     swatches = st.columns(max(1, len(colors)))
     for column, color in zip(swatches, colors):
@@ -1457,12 +1457,12 @@ def render_color_chart(colors) -> None:
 
 def render_ad_score(column, label: str, source_name: str, image: Image.Image, score: dict, heatmap: np.ndarray) -> None:
     with column:
-        st.image(image, caption=f"{label}: {source_name}", use_container_width=True)
+        st.image(image, caption=f"{label}: {source_name}", width="stretch")
         metric_cols = st.columns(3)
         metric_cols[0].metric("Final", score["final_score"])
         metric_cols[1].metric("Clutter", score["clutter"])
         metric_cols[2].metric("Emotion", score["emotion_score"])
-        st.image(heatmap, caption=f"{label} heatmap", use_container_width=True)
+        st.image(heatmap, caption=f"{label} heatmap", width="stretch")
         render_heatmap_download(heatmap, f"{label}_{source_name}", key=f"{label.lower().replace(' ', '_')}_heatmap")
 
 
@@ -1473,7 +1473,7 @@ def render_heatmap_download(heatmap: np.ndarray, source_name: str, key: str) -> 
         file_name=f"neurolens_heatmap_{safe_slug(source_name)}.png",
         mime="image/png",
         key=key,
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -1791,7 +1791,7 @@ def render_ab_chart(comparison: dict) -> None:
         title="A/B Creative Performance Model",
     )
     fig.update_layout(height=430, margin=dict(l=20, r=20, t=70, b=30))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def render_live_metrics(container, metrics: dict) -> None:
