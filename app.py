@@ -372,7 +372,7 @@ def render_neuromarketing_lab() -> None:
         )
 
         render_live_metrics_fragment(ctx)
-        render_camera_replay_panel()
+        render_camera_replay_panel(expanded=not ctx.state.playing)
 
 
 def render_live_metrics_fragment(ctx) -> None:
@@ -399,11 +399,14 @@ if hasattr(st, "fragment"):
     render_live_metrics_fragment = st.fragment(run_every="1s")(render_live_metrics_fragment)
 
 
-def render_camera_replay_panel() -> None:
-    with st.expander("Camera test and diagnostics", expanded=False):
+def render_camera_replay_panel(expanded: bool = False) -> None:
+    with st.expander("Camera test and diagnostics", expanded=expanded):
+        st.warning(
+            "If the hosted webcam connection keeps spinning, run this replay test. "
+            "It uses the same OpenCV processor as the live stream, without requiring browser camera transport."
+        )
         st.caption(
-            "This replay uses the same OpenCV frame processor as the webcam stream. "
-            "It verifies face detection and emotion telemetry when browser camera access or hosted WebRTC transport is unavailable."
+            "Real webcam mode still runs through streamlit-webrtc above. On hosted deployments, stable live video may require private TURN credentials."
         )
 
         if st.button("Run built-in face telemetry replay", key="camera_replay_test", use_container_width=True):
