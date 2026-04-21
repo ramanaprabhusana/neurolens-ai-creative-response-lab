@@ -68,22 +68,23 @@ def main() -> None:
     st.markdown(
         f"""
         <section class="nl-hero">
-            <div class="nl-kicker">Computer Vision + Creative Analytics + Live Biometrics</div>
+            <div class="nl-kicker">Creative Performance Copilot</div>
             <h1>{APP_NAME}</h1>
-            <p>Audit advertising assets, predict A/B response, and compare the prediction with live webcam telemetry.</p>
+            <p>Upload an ad. NeuroLens shows what may hurt performance, what to improve, and what to test before spending budget.</p>
             <div class="nl-badges">
                 <span>No database</span>
-                <span>Demo-ready samples</span>
+                <span>Sample ads included</span>
+                <span>Downloadable fix output</span>
                 <span>Camera optional</span>
             </div>
         </section>
         """,
         unsafe_allow_html=True,
     )
-    render_showcase_story()
+    render_workflow_guide()
 
     tab_audit, tab_doctor, tab_ab, tab_simulator, tab_lab = st.tabs(
-        ["Visual Asset Audit", "Creative Doctor", "A/B Predictor", "Campaign Simulator", "Neuromarketing Lab"]
+        ["Audit", "Fix Recommendations", "Compare Ads", "Forecast Impact", "Live Response Lab"]
     )
 
     with tab_audit:
@@ -103,8 +104,14 @@ def main() -> None:
 
 
 def render_visual_asset_audit() -> None:
-    st.subheader("Visual Asset Audit")
-    source_name, creative_bytes = creative_picker("Creative", "audit", default_kind="focused")
+    st.subheader("Audit")
+    render_tab_intro(
+        title="Start here",
+        question="What could make this ad harder to understand or act on?",
+        action="Upload a JPG/PNG or choose a sample creative.",
+        output="Review clutter, attention, color, accessibility, and the next best edits.",
+    )
+    source_name, creative_bytes = creative_picker("Ad creative", "audit", default_kind="focused")
     if creative_bytes is None:
         st.info("Upload a JPG or PNG creative, or switch to a built-in sample.")
         return
@@ -159,36 +166,45 @@ def render_visual_asset_audit() -> None:
 
 
 def render_creative_doctor() -> None:
-    st.subheader("Creative Doctor")
-    source_name, creative_bytes = creative_picker("Creative Doctor input", "doctor", default_kind="cluttered")
+    st.subheader("Fix Recommendations")
+    render_tab_intro(
+        title="Create a fix output",
+        question="What should change before this creative goes into a test?",
+        action="Select or upload one ad. NeuroLens will generate a stateless creative direction mockup.",
+        output="Compare the original with a recommended direction, then download the PNG and edit brief.",
+    )
+    source_name, creative_bytes = creative_picker("Creative to fix", "doctor", default_kind="cluttered")
     if creative_bytes is None:
-        st.info("Select a sample or upload a creative to generate a cleaner recommended layout.")
+        st.info("Select a sample or upload a creative to generate a recommended creative direction.")
         return
 
     image = load_image_safely(creative_bytes, source_name)
     if image is None:
         return
 
-    with st.spinner("Diagnosing creative and generating recommended layout..."):
+    with st.spinner("Diagnosing creative and generating a recommended direction..."):
         original_score = get_cached_score(creative_bytes, "Doctor Original Score")
         doctor_bytes = cached_doctor_creative_bytes(creative_bytes)
         doctor_image = cached_image_from_bytes(doctor_bytes)
         doctor_score = get_cached_score(doctor_bytes, "Doctor Recommendation Score")
         comparison = compare_score_dicts(original_score, doctor_score)
 
-    render_scorecard("Current creative", original_score)
+    render_scorecard("Original creative", original_score)
     render_doctor_delta(original_score, doctor_score)
+    render_fix_output_summary(original_score, doctor_score)
 
     before_col, after_col = st.columns(2, vertical_alignment="top")
     with before_col:
         st.image(image, caption=f"Before: {source_name}", use_container_width=True)
+        st.markdown("**Original creative diagnosis**")
         render_recommendations(original_score)
 
     with after_col:
-        st.image(doctor_image, caption="Creative Doctor recommendation", use_container_width=True)
+        st.image(doctor_image, caption="Recommended Creative Direction", use_container_width=True)
+        st.markdown("**Recommended direction guidance**")
         render_recommendations(doctor_score)
         st.download_button(
-            "Download recommended PNG",
+            "Download recommended direction PNG",
             data=doctor_bytes,
             file_name=f"neurolens_doctor_{safe_slug(source_name)}.png",
             mime="image/png",
@@ -196,12 +212,19 @@ def render_creative_doctor() -> None:
             use_container_width=True,
         )
 
-    st.caption("Doctor mode creates a stateless mock redesign from the detected palette and audit signals.")
+    st.caption("Fix Recommendations creates a stateless mock creative direction from the detected palette and audit signals. Treat it as an edit brief, not a final production ad.")
+    render_edit_brief_download(source_name, original_score, doctor_score)
     render_doctor_download(source_name, original_score, doctor_score, comparison)
 
 
 def render_ab_predictor() -> None:
-    st.subheader("A/B Predictor")
+    st.subheader("Compare Ads")
+    render_tab_intro(
+        title="Choose the stronger variant",
+        question="Which ad is more likely to be easier to process and act on?",
+        action="Select or upload two ads side by side.",
+        output="Use the predicted winner, confidence margin, and rationale to decide what to test next.",
+    )
     col_a, col_b = st.columns(2)
     with col_a:
         name_a, bytes_a = creative_picker("Ad A", "ab_a", default_kind="focused")
@@ -209,7 +232,7 @@ def render_ab_predictor() -> None:
         name_b, bytes_b = creative_picker("Ad B", "ab_b", default_kind="cluttered")
 
     if bytes_a is None or bytes_b is None:
-        st.info("Select or upload both ads to run the simultaneous entropy and saliency comparison.")
+        st.info("Select or upload both ads to compare their clarity, attention, and emotion-fit signals.")
         return
 
     image_a = load_image_safely(bytes_a, name_a)
@@ -225,7 +248,7 @@ def render_ab_predictor() -> None:
         step=0.05,
         key="ab_heatmap_alpha",
     )
-    with st.spinner("Running A/B saliency and entropy model..."):
+    with st.spinner("Comparing creative performance signals..."):
         score_a = get_cached_score(bytes_a, "Ad A Visual Analysis")
         score_b = get_cached_score(bytes_b, "Ad B Visual Analysis")
         comparison = compare_score_dicts(score_a, score_b)
@@ -247,8 +270,14 @@ def render_ab_predictor() -> None:
 
 
 def render_campaign_simulator() -> None:
-    st.subheader("Campaign Simulator")
-    st.caption("Run a stateless what-if model before you touch the creative file.")
+    st.subheader("Forecast Impact")
+    render_tab_intro(
+        title="Model the business effect",
+        question="How might clutter, attention, and color direction affect CPC and conversion rate?",
+        action="Move the sliders to test a creative scenario.",
+        output="Watch the CPC/CVR forecast, audience-fit radar, and edit plan update immediately.",
+    )
+    st.caption("Run a stateless what-if model before changing the creative file.")
 
     input_col, output_col = st.columns([0.9, 1.1], vertical_alignment="top")
     with input_col:
@@ -297,8 +326,14 @@ def render_campaign_simulator() -> None:
 
 
 def render_neuromarketing_lab() -> None:
-    st.subheader("Neuromarketing Lab")
-    source_name, creative_bytes = creative_picker("Stimulus", "lab", default_kind="trust")
+    st.subheader("Live Response Lab")
+    render_tab_intro(
+        title="Validate with optional live response",
+        question="Do predicted creative signals align with a real viewer response?",
+        action="Choose a stimulus and optionally start the webcam.",
+        output="Compare prediction metrics with frame-by-frame facial telemetry when camera access is available.",
+    )
+    source_name, creative_bytes = creative_picker("Ad stimulus", "lab", default_kind="trust")
     if creative_bytes is None:
         st.info("Upload a lab stimulus, or switch to a built-in sample.")
         return
@@ -311,7 +346,7 @@ def render_neuromarketing_lab() -> None:
     ad_col, webcam_col = st.columns([1, 1], vertical_alignment="top")
     with ad_col:
         st.image(stimulus, caption=f"{source_name} stimulus", use_container_width=True)
-        st.caption("Predicted response model")
+        st.caption("Predicted response")
         prediction_cols = st.columns(3)
         prediction_cols[0].metric("Clutter", f"{predicted['clutter']}/100")
         prediction_cols[1].metric("Emotion Fit", f"{predicted['emotion_score']}/100")
@@ -320,7 +355,7 @@ def render_neuromarketing_lab() -> None:
         render_audit_download(source_name, predicted, key="lab_prediction_report")
 
     with webcam_col:
-        st.caption("Live biometric telemetry")
+        st.caption("Live response telemetry")
         ctx = webrtc_streamer(
             key="neuromarketing-lab",
             mode=WebRtcMode.SENDRECV,
@@ -406,10 +441,9 @@ def render_sidebar() -> None:
         st.metric("Runtime", "Stateless")
         st.metric("Storage", "No database")
         st.divider()
-        st.markdown("**Modules**")
-        st.caption("UI: app.py")
-        st.caption("Analytics: analytics.py")
-        st.caption("Video: webrtc_callbacks.py")
+        st.markdown("**Workflow**")
+        st.caption("Audit -> Fix -> Compare -> Forecast -> Validate")
+        st.caption("UI: app.py | Analytics: analytics.py | Video: webrtc_callbacks.py")
         st.divider()
         st.caption(
             "Facial telemetry is heuristic and frame-by-frame. It is a demo signal, not a clinical emotion classifier."
@@ -421,31 +455,43 @@ def render_sidebar() -> None:
                 - Clutter: Shannon entropy normalized to a 1-100 scale.
                 - Saliency: OpenCV edges plus local contrast, blurred into a simulated heatmap.
                 - Color psychology: K-Means dominant colors mapped to nearest psychology labels.
-                - Business forecast: deterministic mock CPC/CVR rules, not ad-platform estimates.
+                - Forecast Impact: deterministic mock CPC/CVR rules, not ad-platform estimates.
                 - Persona matrix: clutter and color-temperature mapping to audience-fit scores.
                 - Live telemetry: latest-frame face-region heuristics only.
                 """
             )
 
 
-def render_showcase_story() -> None:
+def render_workflow_guide() -> None:
     st.markdown(
         """
-        <section class="nl-story-grid">
-            <div class="nl-before-after">
-                <h3>The old way</h3>
-                <p>Guessing which ad is too busy, manually pulling colors, and separating creative prediction from user response.</p>
+        <section class="nl-workflow">
+            <div class="nl-workflow-intro">
+                <span>Start here</span>
+                <h3>A guided path from ad review to creative action</h3>
+                <p>Use the tabs from left to right: diagnose the creative, generate an edit direction, compare variants, forecast impact, and optionally validate live response.</p>
             </div>
-            <div class="nl-before-after nl-after">
-                <h3>With NeuroLens</h3>
-                <p>Entropy, saliency, color psychology, A/B scoring, and live biometric telemetry sit in one local-first workflow.</p>
-            </div>
-            <div class="nl-steps">
-                <div><span>1</span><strong>Audit</strong><small>Score visual load and attention.</small></div>
-                <div><span>2</span><strong>Compare</strong><small>Predict the stronger creative.</small></div>
-                <div><span>3</span><strong>Measure</strong><small>Watch live response signals.</small></div>
+            <div class="nl-workflow-steps">
+                <div><span>1</span><strong>Audit</strong><small>Find clarity and attention risks.</small></div>
+                <div><span>2</span><strong>Fix</strong><small>Create a direction and edit brief.</small></div>
+                <div><span>3</span><strong>Compare</strong><small>Pick the stronger variant.</small></div>
+                <div><span>4</span><strong>Forecast</strong><small>Estimate CPC/CVR movement.</small></div>
+                <div><span>5</span><strong>Validate</strong><small>Check optional live response.</small></div>
             </div>
         </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_tab_intro(title: str, question: str, action: str, output: str) -> None:
+    st.markdown(
+        f"""
+        <div class="nl-tab-intro">
+            <span>{title}</span>
+            <strong>{question}</strong>
+            <p>{action} {output}</p>
+        </div>
         """,
         unsafe_allow_html=True,
     )
@@ -778,12 +824,60 @@ def render_doctor_delta(original_score: dict, doctor_score: dict) -> None:
     cols[3].metric("Final Score Change", f"{doctor_score['final_score'] - original_score['final_score']:+.1f}")
 
 
+def render_fix_output_summary(original_score: dict, doctor_score: dict) -> None:
+    original_grade, _ = creative_grade(original_score)
+    doctor_grade, doctor_launch = creative_grade(doctor_score)
+    reasons = fix_improvement_reasons(original_score, doctor_score)
+
+    st.markdown(
+        f"""
+        <div class="nl-fix-summary">
+            <span>Recommended Creative Output</span>
+            <strong>Why this direction should perform better</strong>
+            <p>The mock direction moves the creative from readiness grade <b>{original_grade}</b> to <b>{doctor_grade}</b>. {doctor_launch}</p>
+            <ul>
+                {''.join(f'<li>{reason}</li>' for reason in reasons)}
+            </ul>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def fix_improvement_reasons(original_score: dict, doctor_score: dict) -> list[str]:
+    reasons = []
+    clutter_delta = int(original_score["clutter"] - doctor_score["clutter"])
+    saliency_delta = float(doctor_score["focus_score"] - original_score["focus_score"])
+    emotion_delta = float(doctor_score["emotion_score"] - original_score["emotion_score"])
+    final_delta = float(doctor_score.get("final_score", 0) - original_score.get("final_score", 0))
+
+    if clutter_delta > 0:
+        reasons.append(f"Visual clutter improves by {clutter_delta} points, which should make the message easier to scan.")
+    else:
+        reasons.append("The direction keeps visual density controlled while reorganizing the hierarchy around the main action.")
+
+    if saliency_delta > 0:
+        reasons.append(f"Central saliency improves by {saliency_delta:.1f} points, so attention is more likely to land on the conversion cue.")
+    elif original_score["focus_score"] >= 60:
+        reasons.append("The original already has healthy central attention, so the direction preserves that focal path.")
+
+    if emotion_delta > 0:
+        reasons.append(f"Color-emotion fit improves by {emotion_delta:.1f} points, strengthening the intended response cue.")
+    else:
+        reasons.append("The recommendation keeps the strongest color cue while simplifying the surrounding layout.")
+
+    if final_delta > 0:
+        reasons.append(f"The blended readiness score increases by {final_delta:.1f} points, making it a stronger candidate for an A/B test.")
+
+    return reasons[:4]
+
+
 def render_recommendations(results: dict) -> None:
     st.markdown("**Recommended next actions**")
     st.markdown("\n".join(f"- {recommendation}" for recommendation in audit_recommendations(results)))
 
 
-def render_micro_edit_prescriptions(results: dict, heading: str = "Micro-edit prescriptions") -> None:
+def render_micro_edit_prescriptions(results: dict, heading: str = "Specific edit ideas") -> None:
     st.markdown(f"**{heading}**")
     st.markdown("\n".join(f"- {instruction}" for instruction in micro_edit_prescriptions(results)))
 
@@ -791,7 +885,7 @@ def render_micro_edit_prescriptions(results: dict, heading: str = "Micro-edit pr
 def render_business_forecast(results: dict) -> None:
     color_emotion = dominant_color_emotion(results)
     forecast = calculate_kpi_forecast(results["clutter"], results["focus_score"], color_emotion)
-    st.markdown("**Predictive ROI & CPC forecast**")
+    st.markdown("**Forecast preview**")
     cols = st.columns(2)
     cols[0].metric("Predicted CPC", forecast["predicted_cpc"])
     cols[1].metric("Predicted CVR", forecast["predicted_conversion_rate"])
@@ -928,7 +1022,7 @@ def render_audit_download(source_name: str, results: dict, key: str, accessibili
             "Visual clutter is derived from Shannon entropy over grayscale luminance.",
             "Attention heatmap is simulated from OpenCV edge and contrast signals.",
             "Color psychology uses nearest-color matching against a predefined dictionary.",
-            "Business forecast uses mock CPC/CVR rules for scenario planning.",
+            "Forecast Impact uses mock CPC/CVR rules for scenario planning.",
         ],
     }
     if accessibility is not None:
@@ -985,8 +1079,85 @@ def render_doctor_download(source_name: str, original_score: dict, doctor_score:
             "confidence_margin": comparison["margin"],
             "confidence_label": confidence_label(comparison["margin"]),
         },
+        "edit_brief": edit_brief_items(original_score, doctor_score),
     }
-    render_json_download("Download Creative Doctor report", "neurolens_creative_doctor.json", payload, "doctor_report")
+    render_json_download("Download fix report JSON", "neurolens_fix_recommendations.json", payload, "doctor_report")
+
+
+def render_edit_brief_download(source_name: str, original_score: dict, doctor_score: dict) -> None:
+    st.download_button(
+        "Download plain-English edit brief",
+        data=edit_brief_markdown(source_name, original_score, doctor_score),
+        file_name=f"neurolens_edit_brief_{safe_slug(source_name)}.md",
+        mime="text/markdown",
+        key="doctor_edit_brief",
+        use_container_width=True,
+    )
+
+
+def edit_brief_markdown(source_name: str, original_score: dict, doctor_score: dict) -> str:
+    original_grade, original_launch = creative_grade(original_score)
+    doctor_grade, doctor_launch = creative_grade(doctor_score)
+    instructions = edit_brief_items(original_score, doctor_score)
+    reasons = fix_improvement_reasons(original_score, doctor_score)
+
+    lines = [
+        f"# NeuroLens Edit Brief: {source_name}",
+        "",
+        f"Generated: {datetime.now().isoformat(timespec='seconds')}",
+        "",
+        "## Goal",
+        "Use the recommended creative direction as a practical edit brief before launching or A/B testing this ad.",
+        "",
+        "## Readiness Shift",
+        f"- Original creative: grade {original_grade}. {original_launch}",
+        f"- Recommended direction: grade {doctor_grade}. {doctor_launch}",
+        f"- Clutter: {original_score['clutter']}/100 -> {doctor_score['clutter']}/100",
+        f"- Central saliency: {original_score['focus_score']}/100 -> {doctor_score['focus_score']}/100",
+        f"- Emotion fit: {original_score['emotion_score']}/100 -> {doctor_score['emotion_score']}/100",
+        "",
+        "## Why This Should Perform Better",
+    ]
+    lines.extend(f"- {reason}" for reason in reasons)
+    lines.extend(
+        [
+            "",
+            "## Specific Edits",
+        ]
+    )
+    lines.extend(f"- {item}" for item in instructions)
+    lines.extend(
+        [
+            "",
+            "## Note",
+            "This is a stateless mock creative direction, not a production-ready final ad. Use it as a layout and messaging brief for a designer or creative tool.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def edit_brief_items(original_score: dict, doctor_score: dict) -> list[str]:
+    items = []
+    clutter_reduction = max(0, int(original_score["clutter"] - doctor_score["clutter"]))
+    saliency_delta = float(doctor_score["focus_score"] - original_score["focus_score"])
+    dominant = dominant_color_emotion(original_score)
+
+    if clutter_reduction > 0:
+        items.append(
+            f"Reduce background detail, repeated labels, or competing shapes to lower clutter by about {clutter_reduction} points."
+        )
+    else:
+        items.append("Keep the current visual density, but add clearer spacing between headline, proof point, and CTA.")
+
+    if original_score["focus_score"] < 55 or saliency_delta > 0:
+        items.append("Move the CTA, product cue, or face closer to the central attention zone and isolate it with whitespace.")
+    else:
+        items.append("Preserve the current central focal path and make edits around the edges of the layout.")
+
+    items.append(f"Preserve the strongest color cue ({dominant}) and use it primarily for the CTA or most important action.")
+    items.append("Shorten or group secondary copy so the user can understand the offer in one scan.")
+    items.append("Recheck text/background contrast after editing; darken foreground text or simplify overlays if WCAG AA contrast is at risk.")
+    return items[:5]
 
 
 def render_json_download(label: str, filename: str, payload: dict, key: str) -> None:
@@ -1344,6 +1515,104 @@ def inject_theme() -> None:
             letter-spacing: 0;
             text-transform: uppercase;
         }
+        .nl-workflow {
+            display: grid;
+            grid-template-columns: minmax(260px, .9fr) minmax(0, 1.7fr);
+            gap: 12px;
+            margin: 0 0 18px 0;
+        }
+        .nl-workflow-intro,
+        .nl-tab-intro,
+        .nl-fix-summary {
+            border: 1px solid #DCE8EC;
+            border-radius: 8px;
+            background: #FFFFFF;
+            padding: 14px;
+        }
+        .nl-workflow-intro span,
+        .nl-tab-intro span,
+        .nl-fix-summary span {
+            display: block;
+            color: #C75E00;
+            font-size: .78rem;
+            font-weight: 800;
+            letter-spacing: 0;
+            text-transform: uppercase;
+        }
+        .nl-workflow-intro h3 {
+            margin: 6px 0 7px 0;
+            color: #102F3B;
+            font-size: 1.08rem;
+            letter-spacing: 0;
+        }
+        .nl-workflow-intro p,
+        .nl-tab-intro p,
+        .nl-fix-summary p {
+            margin: 0;
+            color: #4D6873;
+            font-size: .92rem;
+            line-height: 1.4;
+        }
+        .nl-workflow-steps {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+        }
+        .nl-workflow-steps div {
+            min-width: 0;
+            border: 1px solid #DCE8EC;
+            border-radius: 8px;
+            background: #FFFFFF;
+            padding: 12px;
+        }
+        .nl-workflow-steps span {
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            width: 24px;
+            height: 24px;
+            border-radius: 999px;
+            background: #FF7A00;
+            color: #FFFFFF;
+            font-size: .78rem;
+            font-weight: 800;
+        }
+        .nl-workflow-steps strong {
+            display: block;
+            margin-top: 7px;
+            color: #102F3B;
+            font-size: .94rem;
+        }
+        .nl-workflow-steps small {
+            display: block;
+            color: #58727C;
+            line-height: 1.25;
+        }
+        .nl-tab-intro {
+            margin: 2px 0 16px 0;
+            background: #F8FBFC;
+        }
+        .nl-tab-intro strong,
+        .nl-fix-summary strong {
+            display: block;
+            color: #102F3B;
+            font-size: 1rem;
+            margin: 4px 0 5px 0;
+        }
+        .nl-fix-summary {
+            margin: 12px 0 16px 0;
+            background: #F5FBF8;
+            border-color: #AEDCC7;
+        }
+        .nl-fix-summary ul {
+            margin: 10px 0 0 18px;
+            padding: 0;
+            color: #2D5662;
+            line-height: 1.42;
+        }
+        .nl-fix-summary li {
+            margin-bottom: 5px;
+        }
         .nl-story-grid {
             display: grid;
             grid-template-columns: 1fr 1fr 1.4fr;
@@ -1458,6 +1727,12 @@ def inject_theme() -> None:
         }
         @media (max-width: 700px) {
             .nl-insight-row {
+                grid-template-columns: 1fr;
+            }
+            .nl-workflow {
+                grid-template-columns: 1fr;
+            }
+            .nl-workflow-steps {
                 grid-template-columns: 1fr;
             }
             .nl-story-grid {
