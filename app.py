@@ -70,15 +70,16 @@ def main() -> None:
     st.markdown(
         f"""
         <section class="nl-hero">
-            <div class="nl-kicker">Creative Performance Copilot</div>
+            <div class="nl-kicker">Ad Creative Preflight</div>
             <h1>{APP_NAME}</h1>
-            <p>Upload one ad once. NeuroLens carries it through audit, fix output, comparison, forecast, and optional response validation before you spend budget.</p>
+            <p>Upload an ad before you spend. NeuroLens checks clarity, attention, contrast, and conversion cues, then turns the results into a practical fix brief.</p>
             <div class="nl-badges">
                 <span>No database</span>
                 <span>Sample ads included</span>
-                <span>Downloadable fix output</span>
+                <span>Launch guidance</span>
+                <span>Downloadable fix brief</span>
                 <span>Preferred visual cue</span>
-                <span>Camera optional</span>
+                <span>Viewer signal optional</span>
             </div>
         </section>
         """,
@@ -89,7 +90,7 @@ def main() -> None:
     render_use_case_fit()
 
     tab_audit, tab_doctor, tab_ab, tab_simulator, tab_lab = st.tabs(
-        ["Audit", "Fix Recommendations", "Compare Ads", "Forecast Impact", "Live Response Lab"]
+        ["Audit", "Fix Brief", "Compare Ads", "Budget Forecast", "Optional Viewer Signal"]
     )
 
     with tab_audit:
@@ -112,9 +113,9 @@ def render_visual_asset_audit() -> None:
     st.subheader("Audit")
     render_tab_intro(
         title="Start here",
-        question="What could make this ad harder to understand or act on?",
+        question="Is this ad ready to spend money on?",
         action="Upload a JPG/PNG or choose a sample creative.",
-        output="Review clutter, attention, color, accessibility, and the next best edits.",
+        output="Get launch guidance, risk signals, a heatmap, and concrete edits to make before testing.",
     )
     source_name, creative_bytes = creative_picker("Ad creative", "audit", default_kind="focused")
     if creative_bytes is None:
@@ -153,6 +154,7 @@ def render_visual_asset_audit() -> None:
             )
 
     with right:
+        render_primary_decision(results)
         render_audit_metrics(results)
         render_insight_summary(results)
         render_recommendations(results)
@@ -171,12 +173,12 @@ def render_visual_asset_audit() -> None:
 
 
 def render_creative_doctor() -> None:
-    st.subheader("Fix Recommendations")
+    st.subheader("Fix Brief")
     render_tab_intro(
-        title="Create a fix output",
-        question="What should change before this creative goes into a test?",
+        title="Turn diagnosis into action",
+        question="What should the designer or marketer change next?",
         action="Select or upload one ad. NeuroLens will generate a stateless creative direction mockup.",
-        output="Compare the original with a recommended direction, then download the PNG, visual cue, and edit brief.",
+        output="Download a recommended direction PNG, preferred visual cue, and plain-English edit brief.",
     )
     source_name, creative_bytes = creative_picker("Creative to fix", "doctor", default_kind="cluttered")
     if creative_bytes is None:
@@ -219,7 +221,7 @@ def render_creative_doctor() -> None:
         )
 
     render_preferred_symbol_output(source_name, original_score, symbol_bytes)
-    st.caption("Fix Recommendations creates a stateless mock creative direction from the detected palette and audit signals. Treat it as an edit brief, not a final production ad.")
+    st.caption("Fix Brief creates a stateless mock creative direction from the detected palette and audit signals. Treat it as an edit brief, not a final production ad.")
     render_edit_brief_download(source_name, original_score, doctor_score)
     render_doctor_download(source_name, original_score, doctor_score, comparison)
 
@@ -277,7 +279,7 @@ def render_ab_predictor() -> None:
 
 
 def render_campaign_simulator() -> None:
-    st.subheader("Forecast Impact")
+    st.subheader("Budget Forecast")
     render_tab_intro(
         title="Model the business effect",
         question="How might clutter, attention, and color direction affect CPC and conversion rate?",
@@ -333,10 +335,10 @@ def render_campaign_simulator() -> None:
 
 
 def render_neuromarketing_lab() -> None:
-    st.subheader("Live Response Lab")
+    st.subheader("Optional Viewer Signal")
     render_tab_intro(
-        title="Validate the response signal",
-        question="Does the predicted creative response have a reality check?",
+        title="Optional validation",
+        question="Does the predicted creative response have a lightweight viewer-signal check?",
         action="Run the built-in replay first. Try browser webcam only when camera access and network relay are available.",
         output="Confirm the frame processor works, then compare live camera signals when the connection succeeds.",
     )
@@ -532,7 +534,7 @@ def render_sidebar() -> None:
         st.metric("Storage", "No database")
         st.divider()
         st.markdown("**Workflow**")
-        st.caption("Audit -> Fix -> Compare -> Forecast -> Validate")
+        st.caption("Audit -> Fix Brief -> Compare -> Forecast -> Optional Signal")
         st.caption("UI: app.py | Analytics: analytics.py | Video: webrtc_callbacks.py")
         render_active_upload_state()
         st.divider()
@@ -546,9 +548,9 @@ def render_sidebar() -> None:
                 - Clutter: Shannon entropy normalized to a 1-100 scale.
                 - Saliency: OpenCV edges plus local contrast, blurred into a simulated heatmap.
                 - Color psychology: K-Means dominant colors mapped to nearest psychology labels.
-                - Forecast Impact: deterministic mock CPC/CVR rules, not ad-platform estimates.
+                - Budget Forecast: deterministic mock CPC/CVR rules, not ad-platform estimates.
                 - Persona matrix: clutter and color-temperature mapping to audience-fit scores.
-                - Live telemetry: latest-frame face-region heuristics only.
+                - Optional viewer signal: latest-frame face-region heuristics only.
                 """
             )
 
@@ -559,15 +561,15 @@ def render_workflow_guide() -> None:
         <section class="nl-workflow">
             <div class="nl-workflow-intro">
                 <span>Start here</span>
-                <h3>A guided path from ad review to creative action</h3>
-                <p>Use the tabs from left to right: upload once, diagnose the creative, generate an edit direction, compare variants, forecast impact, and optionally validate live response.</p>
+                <h3>A practical preflight before ad spend</h3>
+                <p>Use the tabs from left to right: upload once, get a launch decision, create a fix brief, compare variants, forecast budget impact, and optionally check viewer-signal telemetry.</p>
             </div>
             <div class="nl-workflow-steps">
-                <div><span>1</span><strong>Audit</strong><small>Find clarity and attention risks.</small></div>
-                <div><span>2</span><strong>Fix</strong><small>Get a cue, direction, and edit brief.</small></div>
+                <div><span>1</span><strong>Audit</strong><small>Decide launch, edit, or test.</small></div>
+                <div><span>2</span><strong>Fix Brief</strong><small>Get a cue, direction, and edit brief.</small></div>
                 <div><span>3</span><strong>Compare</strong><small>Pick the stronger variant.</small></div>
                 <div><span>4</span><strong>Forecast</strong><small>Estimate CPC/CVR movement.</small></div>
-                <div><span>5</span><strong>Validate</strong><small>Check optional live response.</small></div>
+                <div><span>5</span><strong>Signal</strong><small>Optional viewer-signal check.</small></div>
             </div>
         </section>
         """,
@@ -580,10 +582,10 @@ def render_competition_edge() -> None:
         """
         <section class="nl-edge">
             <div>
-                <span>Why this stands out</span>
-                <strong>It closes the loop from creative diagnosis to a usable fix.</strong>
+                <span>What it does</span>
+                <strong>It turns creative feedback into a launch decision and edit brief.</strong>
             </div>
-            <p>Most audit tools stop at scores. NeuroLens keeps the uploaded ad in the workflow, explains what is hurting performance, generates a recommended creative direction, gives a downloadable visual cue and edit brief, then lets the user forecast and validate the response.</p>
+            <p>Most audit tools stop at scores. NeuroLens keeps the uploaded ad in one workflow, explains what is hurting performance, generates a recommended creative direction, gives a downloadable visual cue and edit brief, then lets the user forecast likely budget impact.</p>
         </section>
         """,
         unsafe_allow_html=True,
@@ -597,7 +599,7 @@ def render_use_case_fit() -> None:
             <div>
                 <span>Best used for</span>
                 <strong>Pre-launch creative decisions</strong>
-                <p>Before spending ad budget, use NeuroLens to find visual clutter, weak attention paths, poor contrast, and unclear emotional cues.</p>
+                <p>Before spending ad budget, use NeuroLens to decide whether an ad is ready to test, needs light edits, or should be revised first.</p>
             </div>
             <div>
                 <span>Useful outputs</span>
@@ -1009,6 +1011,41 @@ def render_audit_metrics(results: dict) -> None:
         st.success("Cognitive load is within the recommended operating range.")
 
 
+def render_primary_decision(results: dict) -> None:
+    grade, _ = creative_grade(results)
+    final_score = float(results.get("final_score", 0))
+    clutter = int(results["clutter"])
+    focus_score = float(results["focus_score"])
+
+    if clutter > 85 or final_score < 40:
+        decision = "Revise before spend"
+        tone_class = "nl-decision-risk"
+        launch_guidance = "The creative has enough risk that a paid test may waste budget before the core issues are fixed."
+        next_step = "Go to Fix Brief and simplify the visual hierarchy before testing."
+    elif final_score >= 65 and focus_score >= 55 and clutter <= 70:
+        decision = "Ready for controlled test"
+        tone_class = "nl-decision-good"
+        launch_guidance = "The creative is readable enough for a small controlled test against another variant."
+        next_step = "Use Compare Ads or Budget Forecast to choose the strongest launch variant."
+    else:
+        decision = "Fix before paid test"
+        tone_class = "nl-decision-watch"
+        launch_guidance = "The ad has usable ingredients, but the edit brief should make the test cleaner and easier to interpret."
+        next_step = "Make the highest-impact edit, then compare against the original."
+
+    st.markdown(
+        f"""
+        <div class="nl-decision {tone_class}">
+            <span>Launch decision</span>
+            <strong>{decision}</strong>
+            <p>{launch_guidance}</p>
+            <small>Creative readiness: {grade} | Next step: {next_step}</small>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_scorecard(label: str, score: dict) -> None:
     grade, launch = creative_grade(score)
     st.markdown(
@@ -1264,7 +1301,7 @@ def render_audit_download(source_name: str, results: dict, key: str, accessibili
             "Visual clutter is derived from Shannon entropy over grayscale luminance.",
             "Attention heatmap is simulated from OpenCV edge and contrast signals.",
             "Color psychology uses nearest-color matching against a predefined dictionary.",
-            "Forecast Impact uses mock CPC/CVR rules for scenario planning.",
+            "Budget Forecast uses mock CPC/CVR rules for scenario planning.",
         ],
     }
     if accessibility is not None:
@@ -2135,6 +2172,49 @@ def inject_theme() -> None:
             color: #102F3B;
             font-size: 1rem;
             margin: 4px 0 5px 0;
+        }
+        .nl-decision {
+            border: 1px solid #DCE8EC;
+            border-radius: 8px;
+            padding: 14px;
+            margin: 0 0 12px 0;
+            background: #FFFFFF;
+        }
+        .nl-decision span {
+            display: block;
+            color: #C75E00;
+            font-size: .78rem;
+            font-weight: 800;
+            letter-spacing: 0;
+            text-transform: uppercase;
+        }
+        .nl-decision strong {
+            display: block;
+            color: #102F3B;
+            font-size: 1.2rem;
+            margin-top: 4px;
+        }
+        .nl-decision p {
+            margin: 6px 0 6px 0;
+            color: #365966;
+            line-height: 1.36;
+        }
+        .nl-decision small {
+            display: block;
+            color: #4D6873;
+            line-height: 1.35;
+        }
+        .nl-decision-good {
+            border-color: #A8D9C0;
+            background: #F3FBF7;
+        }
+        .nl-decision-watch {
+            border-color: #F2D49B;
+            background: #FFF9ED;
+        }
+        .nl-decision-risk {
+            border-color: #F0B8B8;
+            background: #FFF5F5;
         }
         .nl-fix-summary {
             margin: 12px 0 16px 0;
