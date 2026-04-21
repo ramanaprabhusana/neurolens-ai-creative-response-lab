@@ -16,7 +16,7 @@ from analytics import (
     micro_edit_prescriptions,
     score_ad,
 )
-from app import create_doctor_recommendation, normalize_image_bytes
+from app import create_doctor_recommendation, create_preferred_symbol_asset, normalize_image_bytes, preferred_symbol_spec
 from io import BytesIO
 from telemetry import generate_attention_heatmap_layers_with_telemetry, score_ad_with_telemetry
 
@@ -76,6 +76,13 @@ class AnalyticsTests(unittest.TestCase):
         score = score_ad(simple_ad())
         recommendation = create_doctor_recommendation(simple_ad(), score)
         self.assertEqual(recommendation.size, (1100, 720))
+
+    def test_preferred_symbol_is_generated_from_score(self):
+        score = score_ad(simple_ad())
+        spec = preferred_symbol_spec(score)
+        symbol = create_preferred_symbol_asset(score)
+        self.assertIn(spec["kind"], {"focus", "arrow", "shield", "spark", "tag"})
+        self.assertEqual(symbol.size, (760, 500))
 
     def test_kpi_forecast_returns_formatted_business_metrics(self):
         forecast = calculate_kpi_forecast(30, 85, "Action/Urgency")

@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 from io import BytesIO
 
+import av
 import cv2
 import hashlib
 import numpy as np
@@ -75,6 +76,7 @@ def main() -> None:
                 <span>No database</span>
                 <span>Sample ads included</span>
                 <span>Downloadable fix output</span>
+                <span>Preferred visual cue</span>
                 <span>Camera optional</span>
             </div>
         </section>
@@ -171,7 +173,7 @@ def render_creative_doctor() -> None:
         title="Create a fix output",
         question="What should change before this creative goes into a test?",
         action="Select or upload one ad. NeuroLens will generate a stateless creative direction mockup.",
-        output="Compare the original with a recommended direction, then download the PNG and edit brief.",
+        output="Compare the original with a recommended direction, then download the PNG, visual cue, and edit brief.",
     )
     source_name, creative_bytes = creative_picker("Creative to fix", "doctor", default_kind="cluttered")
     if creative_bytes is None:
@@ -186,6 +188,7 @@ def render_creative_doctor() -> None:
         original_score = get_cached_score(creative_bytes, "Doctor Original Score")
         doctor_bytes = cached_doctor_creative_bytes(creative_bytes)
         doctor_image = cached_image_from_bytes(doctor_bytes)
+        symbol_bytes = cached_preferred_symbol_bytes(creative_bytes)
         doctor_score = get_cached_score(doctor_bytes, "Doctor Recommendation Score")
         comparison = compare_score_dicts(original_score, doctor_score)
 
@@ -212,6 +215,7 @@ def render_creative_doctor() -> None:
             use_container_width=True,
         )
 
+    render_preferred_symbol_output(source_name, original_score, symbol_bytes)
     st.caption("Fix Recommendations creates a stateless mock creative direction from the detected palette and audit signals. Treat it as an edit brief, not a final production ad.")
     render_edit_brief_download(source_name, original_score, doctor_score)
     render_doctor_download(source_name, original_score, doctor_score, comparison)
@@ -363,9 +367,12 @@ def render_neuromarketing_lab() -> None:
             media_stream_constraints={"video": True, "audio": False},
             rtc_configuration=webrtc_rtc_configuration(),
             async_processing=True,
+            sendback_audio=False,
+            video_html_attrs={"autoPlay": True, "controls": True, "muted": True},
         )
 
         render_live_metrics_fragment(ctx)
+        render_camera_replay_panel()
 
 
 def render_live_metrics_fragment(ctx) -> None:
@@ -384,7 +391,7 @@ def render_live_metrics_fragment(ctx) -> None:
         render_live_metrics(metric_slots, {})
         status.info(
             "Start the camera to compare predicted response with live facial telemetry. "
-            "If access is denied, the rest of the suite stays usable."
+            "If access is denied, run the built-in camera replay test below to verify the same frame processor."
         )
 
 
@@ -392,21 +399,67 @@ if hasattr(st, "fragment"):
     render_live_metrics_fragment = st.fragment(run_every="1s")(render_live_metrics_fragment)
 
 
+def render_camera_replay_panel() -> None:
+    with st.expander("Camera test and diagnostics", expanded=False):
+        st.caption(
+            "This replay uses the same OpenCV frame processor as the webcam stream. "
+            "It verifies face detection and emotion telemetry when browser camera access or hosted WebRTC transport is unavailable."
+        )
+
+        if st.button("Run built-in face telemetry replay", key="camera_replay_test", use_container_width=True):
+            with st.spinner("Processing replay frames through the live telemetry callback..."):
+                metrics, overlay = run_camera_replay_test()
+            st.session_state["camera_replay_metrics"] = metrics
+            st.session_state["camera_replay_overlay"] = overlay
+
+        metrics = st.session_state.get("camera_replay_metrics")
+        overlay = st.session_state.get("camera_replay_overlay")
+        if metrics and overlay is not None:
+            st.success("Replay detected a face and produced frame-by-frame telemetry.")
+            render_live_metrics(st.container(), metrics)
+            st.image(
+                overlay,
+                caption="Built-in face replay processed by the live OpenCV callback",
+                use_container_width=True,
+            )
+            st.caption("Replay mode is a diagnostic fallback. A real webcam session still uses streamlit-webrtc above.")
+
+
+def run_camera_replay_test() -> tuple[dict, np.ndarray]:
+    from skimage import data
+
+    processor = EmotionVideoProcessor()
+    rgb_image = data.astronaut()
+    overlay = rgb_image
+
+    for frame_index in range(18):
+        offset = int(6 * np.sin(frame_index / 4))
+        shifted = np.roll(rgb_image, offset, axis=1)
+        bgr_frame = cv2.cvtColor(shifted, cv2.COLOR_RGB2BGR)
+        input_frame = av.VideoFrame.from_ndarray(bgr_frame, format="bgr24")
+        output_frame = processor.recv(input_frame)
+        overlay = output_frame.to_ndarray(format="rgb24")
+
+    return processor.get_metrics(), overlay
+
+
 def webrtc_rtc_configuration() -> dict:
     """Return ICE servers for browser-to-Space webcam connectivity.
 
     STUN is enough on some networks, but hosted Streamlit/WebRTC deployments
-    often need TURN relay candidates. Production deployments can provide
-    TURN_URLS, TURN_USERNAME, and TURN_CREDENTIAL as secrets. The public
-    OpenRelay fallback keeps the showcase usable when no private TURN service
-    has been configured.
+    often benefit from TURN relay candidates. Production deployments can
+    provide TURN_URLS, TURN_USERNAME, and TURN_CREDENTIAL as secrets. The
+    public OpenRelay fallback is included as an extra candidate, but the
+    default policy remains "all" so local/direct webcam sessions are not
+    forced through an unreliable public relay.
     """
     ice_servers = [{"urls": DEFAULT_STUN_SERVERS}]
     turn_urls = split_env_list("TURN_URLS")
     turn_username = os.getenv("TURN_USERNAME", "")
     turn_credential = os.getenv("TURN_CREDENTIAL", "")
 
-    if turn_urls and turn_username and turn_credential:
+    has_private_turn = bool(turn_urls and turn_username and turn_credential)
+    if has_private_turn:
         ice_servers.append(
             {
                 "urls": turn_urls,
@@ -423,10 +476,9 @@ def webrtc_rtc_configuration() -> dict:
             }
         )
 
-    default_policy = "relay" if len(ice_servers) > 1 else "all"
-    ice_transport_policy = os.getenv("WEBRTC_ICE_TRANSPORT_POLICY", default_policy).strip().lower()
+    ice_transport_policy = os.getenv("WEBRTC_ICE_TRANSPORT_POLICY", "all").strip().lower()
     if ice_transport_policy not in {"all", "relay"}:
-        ice_transport_policy = default_policy
+        ice_transport_policy = "all"
     return {"iceServers": ice_servers, "iceTransportPolicy": ice_transport_policy}
 
 
@@ -473,7 +525,7 @@ def render_workflow_guide() -> None:
             </div>
             <div class="nl-workflow-steps">
                 <div><span>1</span><strong>Audit</strong><small>Find clarity and attention risks.</small></div>
-                <div><span>2</span><strong>Fix</strong><small>Create a direction and edit brief.</small></div>
+                <div><span>2</span><strong>Fix</strong><small>Get a cue, direction, and edit brief.</small></div>
                 <div><span>3</span><strong>Compare</strong><small>Pick the stronger variant.</small></div>
                 <div><span>4</span><strong>Forecast</strong><small>Estimate CPC/CVR movement.</small></div>
                 <div><span>5</span><strong>Validate</strong><small>Check optional live response.</small></div>
@@ -783,6 +835,15 @@ def cached_doctor_creative_bytes(file_bytes: bytes) -> bytes:
 
 
 @st.cache_data(**CACHE_DATA_KWARGS)
+def cached_preferred_symbol_bytes(file_bytes: bytes) -> bytes:
+    score = cached_score_from_bytes(file_bytes)
+    symbol_image = create_preferred_symbol_asset(score)
+    buffer = BytesIO()
+    symbol_image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+@st.cache_data(**CACHE_DATA_KWARGS)
 def sample_creative_bytes(kind: str) -> bytes:
     image = create_sample_ad(kind)
     buffer = BytesIO()
@@ -818,23 +879,24 @@ def render_scorecard(label: str, score: dict) -> None:
 
 def render_doctor_delta(original_score: dict, doctor_score: dict) -> None:
     cols = st.columns(4)
-    cols[0].metric("Clutter Change", f"{doctor_score['clutter'] - original_score['clutter']:+d}")
-    cols[1].metric("Saliency Change", f"{doctor_score['focus_score'] - original_score['focus_score']:+.1f}")
-    cols[2].metric("Emotion Change", f"{doctor_score['emotion_score'] - original_score['emotion_score']:+.1f}")
-    cols[3].metric("Final Score Change", f"{doctor_score['final_score'] - original_score['final_score']:+.1f}")
+    cols[0].metric("Clutter Reduced", f"{original_score['clutter'] - doctor_score['clutter']:+d}")
+    cols[1].metric("Saliency Gain", f"{doctor_score['focus_score'] - original_score['focus_score']:+.1f}")
+    cols[2].metric("Emotion Gain", f"{doctor_score['emotion_score'] - original_score['emotion_score']:+.1f}")
+    cols[3].metric("Readiness Gain", f"{doctor_score['final_score'] - original_score['final_score']:+.1f}")
 
 
 def render_fix_output_summary(original_score: dict, doctor_score: dict) -> None:
     original_grade, _ = creative_grade(original_score)
     doctor_grade, doctor_launch = creative_grade(doctor_score)
     reasons = fix_improvement_reasons(original_score, doctor_score)
+    symbol = preferred_symbol_spec(original_score)
 
     st.markdown(
         f"""
         <div class="nl-fix-summary">
             <span>Recommended Creative Output</span>
             <strong>Why this direction should perform better</strong>
-            <p>The mock direction moves the creative from readiness grade <b>{original_grade}</b> to <b>{doctor_grade}</b>. {doctor_launch}</p>
+            <p>The mock direction moves the creative from readiness grade <b>{original_grade}</b> to <b>{doctor_grade}</b>. {doctor_launch} It also recommends a <b>{symbol['name']}</b> so the edit has a concrete visual anchor.</p>
             <ul>
                 {''.join(f'<li>{reason}</li>' for reason in reasons)}
             </ul>
@@ -842,6 +904,40 @@ def render_fix_output_summary(original_score: dict, doctor_score: dict) -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_preferred_symbol_output(source_name: str, score: dict, symbol_bytes: bytes) -> None:
+    spec = preferred_symbol_spec(score)
+    st.markdown("**Preferred visual cue**")
+    symbol_col, guidance_col = st.columns([0.38, 0.62], vertical_alignment="top")
+    with symbol_col:
+        st.image(cached_image_from_bytes(symbol_bytes), caption=f"{spec['name']} cue", use_container_width=True)
+        st.download_button(
+            "Download visual cue PNG",
+            data=symbol_bytes,
+            file_name=f"neurolens_visual_cue_{safe_slug(source_name)}.png",
+            mime="image/png",
+            key="doctor_visual_cue",
+            use_container_width=True,
+        )
+
+    with guidance_col:
+        st.markdown(
+            f"""
+            <div class="nl-symbol-card">
+                <span>Use this cue</span>
+                <strong>{spec['name']}</strong>
+                <p>{spec['why']}</p>
+                <dl>
+                    <dt>Best placement</dt>
+                    <dd>{spec['placement']}</dd>
+                    <dt>Creative role</dt>
+                    <dd>{spec['role']}</dd>
+                </dl>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def fix_improvement_reasons(original_score: dict, doctor_score: dict) -> list[str]:
@@ -1079,6 +1175,7 @@ def render_doctor_download(source_name: str, original_score: dict, doctor_score:
             "confidence_margin": comparison["margin"],
             "confidence_label": confidence_label(comparison["margin"]),
         },
+        "preferred_visual_cue": preferred_symbol_spec(original_score),
         "edit_brief": edit_brief_items(original_score, doctor_score),
     }
     render_json_download("Download fix report JSON", "neurolens_fix_recommendations.json", payload, "doctor_report")
@@ -1100,6 +1197,7 @@ def edit_brief_markdown(source_name: str, original_score: dict, doctor_score: di
     doctor_grade, doctor_launch = creative_grade(doctor_score)
     instructions = edit_brief_items(original_score, doctor_score)
     reasons = fix_improvement_reasons(original_score, doctor_score)
+    symbol = preferred_symbol_spec(original_score)
 
     lines = [
         f"# NeuroLens Edit Brief: {source_name}",
@@ -1115,6 +1213,12 @@ def edit_brief_markdown(source_name: str, original_score: dict, doctor_score: di
         f"- Clutter: {original_score['clutter']}/100 -> {doctor_score['clutter']}/100",
         f"- Central saliency: {original_score['focus_score']}/100 -> {doctor_score['focus_score']}/100",
         f"- Emotion fit: {original_score['emotion_score']}/100 -> {doctor_score['emotion_score']}/100",
+        "",
+        "## Preferred Visual Cue",
+        f"- Cue: {symbol['name']}",
+        f"- Label: {symbol['label']}",
+        f"- Placement: {symbol['placement']}",
+        f"- Why: {symbol['why']}",
         "",
         "## Why This Should Perform Better",
     ]
@@ -1154,6 +1258,8 @@ def edit_brief_items(original_score: dict, doctor_score: dict) -> list[str]:
     else:
         items.append("Preserve the current central focal path and make edits around the edges of the layout.")
 
+    symbol = preferred_symbol_spec(original_score)
+    items.append(f"Add the {symbol['name']} cue near the main conversion point: {symbol['placement']}")
     items.append(f"Preserve the strongest color cue ({dominant}) and use it primarily for the CTA or most important action.")
     items.append("Shorten or group secondary copy so the user can understand the offer in one scan.")
     items.append("Recheck text/background contrast after editing; darken foreground text or simplify overlays if WCAG AA contrast is at risk.")
@@ -1289,10 +1395,234 @@ def image_array_to_png_bytes(image_array: np.ndarray) -> bytes:
     return buffer.getvalue()
 
 
+def preferred_symbol_spec(score: dict) -> dict[str, str]:
+    emotion = dominant_color_emotion(score)
+    clutter = int(score.get("clutter", 0))
+    focus = float(score.get("focus_score", 0))
+    accent = best_accent_hex(score)
+
+    if clutter > 75:
+        return {
+            "kind": "focus",
+            "name": "CTA Focus Ring",
+            "label": "CLEAR PATH",
+            "accent": accent,
+            "why": "The creative is visually busy, so the first fix is a single visual anchor that tells the viewer where to act.",
+            "placement": "Place it around or directly behind the primary CTA after removing competing background detail.",
+            "role": "Simplifies the scan path and makes the next action feel obvious.",
+        }
+
+    if focus < 55:
+        return {
+            "kind": "arrow",
+            "name": "Attention Arrow",
+            "label": "START HERE",
+            "accent": accent,
+            "why": "The attention signal is too diffuse, so a directional cue can guide the eye toward the conversion point.",
+            "placement": "Point it from the outer visual area toward the CTA, product, face, or offer in the central third.",
+            "role": "Converts scattered attention into one readable motion path.",
+        }
+
+    if emotion == "Action/Urgency":
+        return {
+            "kind": "arrow",
+            "name": "Action Arrow",
+            "label": "ACT NOW",
+            "accent": accent,
+            "why": "The dominant color already supports urgency, so the cue should reinforce momentum without adding clutter.",
+            "placement": "Attach it to the CTA or strongest offer block, not to secondary copy.",
+            "role": "Turns an urgency color cue into a clearer action cue.",
+        }
+
+    if emotion in {"Trust/Stability", "Growth/Reassurance"}:
+        return {
+            "kind": "shield",
+            "name": "Trust Check Badge",
+            "label": "TRUSTED",
+            "accent": accent,
+            "why": "The palette points toward confidence and reassurance, so a trust badge makes the emotional cue explicit.",
+            "placement": "Place it near proof, guarantee, testimonial, security, or booking language.",
+            "role": "Makes safety, credibility, or reassurance visible at a glance.",
+        }
+
+    if emotion == "Premium/Aspiration":
+        return {
+            "kind": "spark",
+            "name": "Premium Signal",
+            "label": "BEST PICK",
+            "accent": accent,
+            "why": "The palette leans aspirational, so a restrained premium mark can add perceived value without discounting.",
+            "placement": "Place it near the product, bundle, or hero benefit instead of the legal/footer area.",
+            "role": "Signals quality and selection while keeping the layout clean.",
+        }
+
+    return {
+        "kind": "tag",
+        "name": "Value Tag",
+        "label": "KEY OFFER",
+        "accent": accent,
+        "why": "The palette is neutral, so the cue should clarify the offer rather than push a strong emotion.",
+        "placement": "Place it beside the main benefit or price/offer line.",
+        "role": "Helps the viewer understand what matters first.",
+    }
+
+
+def create_preferred_symbol_asset(score: dict) -> Image.Image:
+    spec = preferred_symbol_spec(score)
+    width, height = 760, 500
+    accent = spec["accent"]
+    dark = "#102F3B"
+    background = soften_hex(accent, amount=0.88)
+
+    image = Image.new("RGB", (width, height), background)
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((34, 34, width - 34, height - 34), radius=26, fill="#FFFFFF", outline="#D9E4EA", width=4)
+    draw.rounded_rectangle((74, 72, 322, 320), radius=28, fill=soften_hex(accent, amount=0.82), outline="#DDECEF", width=3)
+    draw_symbol_mark(draw, (116, 111, 280, 275), spec["kind"], accent, dark, "#FFFFFF")
+
+    draw.text((365, 92), "PREFERRED VISUAL CUE", fill="#C75E00", font=_font(22))
+    draw.text((365, 130), spec["name"], fill=dark, font=_font(44))
+    draw.rounded_rectangle((365, 202, 640, 264), radius=16, fill=accent)
+    center_text(draw, (365, 202, 640, 264), spec["label"], _font(26), "#FFFFFF")
+    draw_wrapped_text(draw, spec["role"], (365, 300), 38, "#42616D", _font(26), line_gap=8)
+    return image
+
+
+def draw_symbol_mark(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    kind: str,
+    accent: str,
+    dark: str,
+    light: str,
+) -> None:
+    x1, y1, x2, y2 = box
+    width = x2 - x1
+    height = y2 - y1
+    cx = x1 + width // 2
+    cy = y1 + height // 2
+
+    if kind == "focus":
+        draw.ellipse((x1 + 6, y1 + 6, x2 - 6, y2 - 6), outline=accent, width=14)
+        draw.ellipse((x1 + 42, y1 + 42, x2 - 42, y2 - 42), outline=dark, width=8)
+        draw.line((cx, y1 + 20, cx, y1 + 54), fill=dark, width=8)
+        draw.line((cx, y2 - 54, cx, y2 - 20), fill=dark, width=8)
+        draw.line((x1 + 20, cy, x1 + 54, cy), fill=dark, width=8)
+        draw.line((x2 - 54, cy, x2 - 20, cy), fill=dark, width=8)
+        return
+
+    if kind == "shield":
+        points = [
+            (cx, y1 + 4),
+            (x2 - 20, y1 + 34),
+            (x2 - 36, y2 - 48),
+            (cx, y2 - 2),
+            (x1 + 36, y2 - 48),
+            (x1 + 20, y1 + 34),
+        ]
+        draw.polygon(points, fill=accent)
+        draw.line(points + [points[0]], fill=dark, width=5)
+        draw.line((x1 + 54, cy + 3, cx - 14, cy + 38, x2 - 48, cy - 34), fill=light, width=15, joint="curve")
+        return
+
+    if kind == "spark":
+        points = star_points(cx, cy, min(width, height) // 2 - 6, min(width, height) // 5)
+        draw.polygon(points, fill=accent)
+        draw.line(points + [points[0]], fill=dark, width=4)
+        draw.ellipse((cx - 22, cy - 22, cx + 22, cy + 22), fill=light)
+        return
+
+    if kind == "tag":
+        points = [
+            (x1 + 16, y1 + 44),
+            (x2 - 48, y1 + 26),
+            (x2 - 10, cy),
+            (x2 - 48, y2 - 26),
+            (x1 + 16, y2 - 44),
+        ]
+        draw.polygon(points, fill=accent)
+        draw.line(points + [points[0]], fill=dark, width=5)
+        draw.ellipse((x2 - 74, cy - 16, x2 - 42, cy + 16), fill=light, outline=dark, width=4)
+        draw.line((x1 + 50, cy, x2 - 108, cy), fill=light, width=11)
+        return
+
+    draw.rounded_rectangle((x1 + 6, cy - 35, x1 + int(width * 0.62), cy + 35), radius=18, fill=accent)
+    draw.polygon(
+        [
+            (x1 + int(width * 0.53), y1 + 14),
+            (x2 - 4, cy),
+            (x1 + int(width * 0.53), y2 - 14),
+        ],
+        fill=accent,
+    )
+    draw.line((x1 + 40, cy, x1 + int(width * 0.70), cy), fill=light, width=12)
+
+
+def star_points(cx: int, cy: int, outer_radius: int, inner_radius: int) -> list[tuple[int, int]]:
+    points = []
+    for index in range(10):
+        radius = outer_radius if index % 2 == 0 else inner_radius
+        angle = -np.pi / 2 + index * np.pi / 5
+        points.append((int(cx + radius * np.cos(angle)), int(cy + radius * np.sin(angle))))
+    return points
+
+
+def center_text(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    text: str,
+    font,
+    fill: str,
+) -> None:
+    text_box = draw.textbbox((0, 0), text, font=font)
+    text_width = text_box[2] - text_box[0]
+    text_height = text_box[3] - text_box[1]
+    x1, y1, x2, y2 = box
+    draw.text(
+        (x1 + ((x2 - x1) - text_width) / 2, y1 + ((y2 - y1) - text_height) / 2 - 2),
+        text,
+        fill=fill,
+        font=font,
+    )
+
+
+def draw_wrapped_text(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    origin: tuple[int, int],
+    max_chars: int,
+    fill: str,
+    font,
+    line_gap: int = 6,
+) -> None:
+    x, y = origin
+    line_height = draw.textbbox((0, 0), "Ag", font=font)[3] + line_gap
+    for line in wrap_text(text, max_chars):
+        draw.text((x, y), line, fill=fill, font=font)
+        y += line_height
+
+
+def wrap_text(text: str, max_chars: int) -> list[str]:
+    words = text.split()
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if len(candidate) > max_chars and current:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines
+
+
 def create_doctor_recommendation(image: Image.Image, score: dict) -> Image.Image:
     width, height = 1100, 720
     dominant = score["colors"][0].hex if score.get("colors") else "#1F5B73"
     accent = best_accent_hex(score)
+    symbol_spec = preferred_symbol_spec(score)
     background = soften_hex(dominant, amount=0.88)
     text_color = "#102F3B"
 
@@ -1311,11 +1641,10 @@ def create_doctor_recommendation(image: Image.Image, score: dict) -> Image.Image
     draw.text((164, 526), cta, fill="#FFFFFF", font=_font(30))
 
     draw.rounded_rectangle((385, 95, 1030, 625), radius=28, fill=accent, outline=accent, width=5)
-    draw.ellipse((705, 210, 880, 385), fill="#FFFFFF", outline=dominant, width=6)
-    draw.arc((740, 262, 845, 348), 200, 340, fill=accent, width=7)
-    draw.ellipse((762, 275, 785, 298), fill=text_color)
-    draw.ellipse((812, 275, 835, 298), fill=text_color)
-    draw.text((660, 455), "Primary focal zone", fill="#FFFFFF", font=_font(30))
+    draw.rounded_rectangle((610, 150, 930, 470), radius=28, fill="#FFFFFF", outline=soften_hex(accent, 0.62), width=5)
+    draw_symbol_mark(draw, (680, 205, 860, 385), symbol_spec["kind"], accent, text_color, "#FFFFFF")
+    draw.text((575, 505), symbol_spec["name"], fill="#FFFFFF", font=_font(34))
+    draw.text((575, 548), symbol_spec["label"], fill="#FFFFFF", font=_font(26))
     return canvas
 
 
@@ -1613,6 +1942,47 @@ def inject_theme() -> None:
         .nl-fix-summary li {
             margin-bottom: 5px;
         }
+        .nl-symbol-card {
+            border: 1px solid #DCE8EC;
+            border-radius: 8px;
+            background: #FFFFFF;
+            padding: 16px;
+        }
+        .nl-symbol-card span {
+            display: block;
+            color: #C75E00;
+            font-size: .78rem;
+            font-weight: 800;
+            letter-spacing: 0;
+            text-transform: uppercase;
+        }
+        .nl-symbol-card strong {
+            display: block;
+            color: #102F3B;
+            font-size: 1.12rem;
+            margin: 4px 0 8px 0;
+        }
+        .nl-symbol-card p {
+            margin: 0 0 12px 0;
+            color: #42616D;
+            line-height: 1.42;
+        }
+        .nl-symbol-card dl {
+            margin: 0;
+            display: grid;
+            grid-template-columns: 130px minmax(0, 1fr);
+            gap: 8px 12px;
+        }
+        .nl-symbol-card dt {
+            color: #5C7480;
+            font-size: .82rem;
+            font-weight: 800;
+        }
+        .nl-symbol-card dd {
+            margin: 0;
+            color: #102F3B;
+            line-height: 1.35;
+        }
         .nl-story-grid {
             display: grid;
             grid-template-columns: 1fr 1fr 1.4fr;
@@ -1739,6 +2109,9 @@ def inject_theme() -> None:
                 grid-template-columns: 1fr;
             }
             .nl-steps {
+                grid-template-columns: 1fr;
+            }
+            .nl-symbol-card dl {
                 grid-template-columns: 1fr;
             }
             .nl-hero h1 {
