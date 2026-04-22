@@ -4,6 +4,7 @@ import json
 import os
 import time
 from datetime import datetime
+from html import escape
 from io import BytesIO
 
 import av
@@ -163,6 +164,11 @@ def render_visual_asset_audit() -> None:
         render_business_forecast(results)
         if accessibility is not None:
             render_accessibility_panel(accessibility[0])
+        render_generate_report_component(
+            source_name,
+            results,
+            accessibility=accessibility[0] if accessibility is not None else None,
+        )
         render_audit_download(
             source_name,
             results,
@@ -1384,6 +1390,381 @@ def render_accessibility_panel(accessibility) -> None:
         st.markdown("\n".join(f"- {item}" for item in accessibility.recommendations))
 
 
+def render_generate_report_component(source_name: str, results: dict, accessibility=None) -> None:
+    report = manager_report_payload(source_name, results, accessibility)
+    status_class = f"nl-report-{report['executive_summary']['risk_level'].lower()}"
+    summary = report["executive_summary"]
+
+    st.markdown(
+        f"""
+        <div class="nl-report-panel {status_class}">
+            <span>Generate report</span>
+            <strong>{escape(summary['decision'])}</strong>
+            <p>{escape(summary['takeaway'])}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    report_cols = st.columns(3)
+    report_cols[0].metric(
+        "Creative grade",
+        summary["grade"],
+        help="A plain-English readiness grade based on the existing creative scores.",
+    )
+    report_cols[1].metric(
+        "Next step",
+        summary["priority"],
+        help="Shows whether this ad needs low, medium, or high editing effort before paid testing.",
+    )
+    report_cols[2].metric(
+        "Use case",
+        "Pre-launch",
+        help="Best used before spending ad budget, briefing a designer, or choosing an A/B test variant.",
+    )
+
+    with st.expander("Preview manager report", expanded=True):
+        st.markdown(f"**Why this is useful:** {report['business_use']}")
+        st.markdown(f"**Recommended next move:** {summary['next_move']}")
+        st.markdown(manager_report_table_markdown(report["score_interpretation"]))
+        st.markdown("**Action list for the next creative pass**")
+        st.markdown("\n".join(f"{index}. {item}" for index, item in enumerate(report["recommended_actions"], start=1)))
+
+    download_cols = st.columns(2)
+    download_cols[0].download_button(
+        "Download manager report",
+        data=manager_report_markdown(report),
+        file_name=f"neurolens_manager_report_{safe_slug(source_name)}.md",
+        mime="text/markdown",
+        key="manager_report_markdown",
+        width="stretch",
+    )
+    download_cols[1].download_button(
+        "Download report data",
+        data=json.dumps(report, indent=2),
+        file_name=f"neurolens_manager_report_{safe_slug(source_name)}.json",
+        mime="application/json",
+        key="manager_report_json",
+        width="stretch",
+    )
+
+
+def manager_report_payload(source_name: str, results: dict, accessibility=None) -> dict:
+    decision = manager_report_decision(results)
+    color_emotion = dominant_color_emotion(results)
+    forecast = calculate_kpi_forecast(results["clutter"], results["focus_score"], color_emotion)
+    dominant = results["colors"][0] if results.get("colors") else None
+    actions = manager_report_actions(results, accessibility)
+
+    payload = {
+        "app": APP_NAME,
+        "report_type": "manager_creative_report",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "creative": source_name,
+        "business_use": (
+            "Use this before buying traffic, before briefing a designer, or before choosing which ad variant "
+            "deserves an A/B test."
+        ),
+        "executive_summary": {
+            "decision": decision["label"],
+            "grade": decision["grade"],
+            "priority": decision["priority"],
+            "risk_level": decision["risk_level"],
+            "takeaway": manager_report_takeaway(results, accessibility),
+            "next_move": manager_report_next_move(results, decision, accessibility),
+        },
+        "score_interpretation": manager_report_score_table(results, accessibility),
+        "recommended_actions": actions,
+        "budget_forecast": forecast,
+        "dominant_color": {
+            "hex": dominant.hex if dominant else "N/A",
+            "share": round(float(dominant.percentage), 1) if dominant else 0.0,
+            "strategy": color_emotion,
+        },
+        "scores": serializable_score(results),
+        "important_note": (
+            "This is a decision-support report. Use it to improve the creative and plan a test, "
+            "not as a guarantee of campaign results."
+        ),
+    }
+    if accessibility is not None:
+        payload["accessibility_risk"] = {
+            "score": accessibility.score,
+            "status": accessibility.wcag_status,
+            "contrast_ratio": accessibility.contrast_ratio,
+            "risk_pixels": accessibility.risk_pixels,
+            "recommendations": list(accessibility.recommendations),
+        }
+    return payload
+
+
+def manager_report_decision(results: dict) -> dict[str, str]:
+    grade, launch = creative_grade(results)
+    final_score = float(results.get("final_score", 0))
+    clutter = int(results.get("clutter", 0))
+
+    if clutter > 85 or final_score < 40:
+        return {
+            "label": "Revise before paid traffic",
+            "grade": grade,
+            "priority": "High effort",
+            "risk_level": "Risk",
+            "launch_note": launch,
+        }
+    if clutter > 75 or final_score < 55:
+        return {
+            "label": "Fix before spend",
+            "grade": grade,
+            "priority": "Medium effort",
+            "risk_level": "Watch",
+            "launch_note": launch,
+        }
+    if final_score >= 70:
+        return {
+            "label": "Ready for a controlled A/B test",
+            "grade": grade,
+            "priority": "Low effort",
+            "risk_level": "Good",
+            "launch_note": launch,
+        }
+    return {
+        "label": "Test after light edits",
+        "grade": grade,
+        "priority": "Medium effort",
+        "risk_level": "Watch",
+        "launch_note": launch,
+    }
+
+
+def manager_report_takeaway(results: dict, accessibility=None) -> str:
+    clutter = int(results.get("clutter", 50))
+    focus = float(results.get("focus_score", 50))
+    final_score = float(results.get("final_score", 0))
+
+    if clutter > 75:
+        return "The main risk is scan friction. The viewer may need too much effort to understand the offer before scrolling."
+    if accessibility is not None and accessibility.score < 70:
+        return "The main risk is readability. Improving contrast can make the offer and CTA easier to understand."
+    if focus < 55:
+        return "The main risk is attention drift. The CTA, product, or offer is not visually dominant enough yet."
+    if final_score >= 70:
+        return "The creative is clear enough for a controlled test. Keep the layout stable and test one meaningful variant."
+    return "The creative is usable, but it needs a clearer hierarchy before it becomes a strong paid test candidate."
+
+
+def manager_report_next_move(results: dict, decision: dict[str, str], accessibility=None) -> str:
+    if decision["risk_level"] == "Good":
+        return "Launch a small A/B test and use the Fix Brief tab to create one focused challenger variant."
+    if accessibility is not None and accessibility.score < 70:
+        return "Improve text and CTA contrast first, then rerun the audit before spending budget."
+    if int(results.get("clutter", 50)) > 75:
+        return "Simplify the background, reduce competing elements, and isolate one CTA before testing."
+    if float(results.get("focus_score", 50)) < 55:
+        return "Move the main offer or CTA closer to the primary attention zone, then compare the revised version."
+    return "Make the listed light edits, then use Compare Ads to choose between the original and revised creative."
+
+
+def manager_report_score_table(results: dict, accessibility=None) -> list[dict[str, str]]:
+    clutter = int(results.get("clutter", 50))
+    focus = float(results.get("focus_score", 50))
+    emotion = float(results.get("emotion_score", 50))
+    final_score = float(results.get("final_score", 0))
+
+    rows = [
+        {
+            "Signal": "Overall readiness",
+            "Result": f"{final_score:.1f}/100",
+            "What it means": readiness_meaning(final_score),
+            "Manager decision": readiness_decision(final_score),
+        },
+        {
+            "Signal": "Visual clutter",
+            "Result": f"{clutter}/100",
+            "What it means": clutter_meaning(clutter),
+            "Manager decision": clutter_decision(clutter),
+        },
+        {
+            "Signal": "Attention focus",
+            "Result": f"{focus:.1f}/100",
+            "What it means": attention_meaning(focus),
+            "Manager decision": attention_decision(focus),
+        },
+        {
+            "Signal": "Color fit",
+            "Result": f"{emotion:.1f}/100",
+            "What it means": color_fit_meaning(emotion, dominant_color_emotion(results)),
+            "Manager decision": color_fit_decision(emotion),
+        },
+    ]
+    if accessibility is not None:
+        rows.append(
+            {
+                "Signal": "Readability risk",
+                "Result": f"{accessibility.score}/100",
+                "What it means": f"{accessibility.wcag_status} with {accessibility.contrast_ratio}:1 estimated contrast.",
+                "Manager decision": "Fix contrast before launch." if accessibility.score < 70 else "Keep contrast stable.",
+            }
+        )
+    return rows
+
+
+def readiness_meaning(score: float) -> str:
+    if score >= 70:
+        return "Strong enough to justify a controlled test."
+    if score >= 55:
+        return "Usable, but light edits can reduce wasted spend."
+    if score >= 40:
+        return "Needs revision before it is a good paid test candidate."
+    return "High risk for paid traffic without a larger creative rethink."
+
+
+def readiness_decision(score: float) -> str:
+    if score >= 70:
+        return "Test against one challenger."
+    if score >= 55:
+        return "Edit before scaling."
+    return "Revise before spend."
+
+
+def clutter_meaning(score: int) -> str:
+    if score > 75:
+        return "The ad is likely too busy for fast-scrolling placements."
+    if score < 45:
+        return "The ad is easy to scan and should preserve whitespace."
+    return "The ad is readable, but hierarchy still matters."
+
+
+def clutter_decision(score: int) -> str:
+    if score > 75:
+        return "Remove competing detail."
+    if score < 45:
+        return "Protect the clean layout."
+    return "Tighten the visual hierarchy."
+
+
+def attention_meaning(score: float) -> str:
+    if score > 80:
+        return "The key message or CTA is likely easy to notice."
+    if score < 55:
+        return "Attention may drift away from the action point."
+    return "Attention is workable, but the CTA can be made clearer."
+
+
+def attention_decision(score: float) -> str:
+    if score > 80:
+        return "Keep the focal path."
+    if score < 55:
+        return "Reposition the CTA."
+    return "Improve CTA contrast or placement."
+
+
+def color_fit_meaning(score: float, strategy: str) -> str:
+    if score >= 65:
+        return f"The dominant color direction supports {strategy.lower()}."
+    if score >= 35:
+        return f"The color direction is serviceable, but {strategy.lower()} could be clearer."
+    return "The palette does not strongly support a clear response cue."
+
+
+def color_fit_decision(score: float) -> str:
+    if score >= 65:
+        return "Preserve the CTA color cue."
+    if score >= 35:
+        return "Strengthen one accent color."
+    return "Choose a clearer CTA color role."
+
+
+def manager_report_actions(results: dict, accessibility=None) -> list[str]:
+    actions = list(actionable_micro_edit_steps(results))
+    if accessibility is not None and accessibility.score < 70:
+        actions.append("Increase text and CTA contrast before using this in a paid placement.")
+    actions.append("After editing, rerun Audit and Compare Ads to confirm the revision improves readiness.")
+    return actions[:5]
+
+
+def manager_report_markdown(report: dict) -> str:
+    summary = report["executive_summary"]
+    lines = [
+        f"# NeuroLens Manager Report: {report['creative']}",
+        "",
+        f"Generated: {report['generated_at']}",
+        "",
+        "## Executive Summary",
+        f"- Decision: {summary['decision']}",
+        f"- Creative grade: {summary['grade']}",
+        f"- Editing priority: {summary['priority']}",
+        f"- Main takeaway: {summary['takeaway']}",
+        f"- Recommended next move: {summary['next_move']}",
+        "",
+        "## Where This Is Useful",
+        report["business_use"],
+        "",
+        "## Score Interpretation",
+    ]
+    for row in report["score_interpretation"]:
+        lines.append(
+            f"- {row['Signal']}: {row['Result']}. {row['What it means']} Manager decision: {row['Manager decision']}"
+        )
+    lines.extend(
+        [
+            "",
+            "## Budget Forecast",
+            f"- Predicted CPC: {report['budget_forecast']['predicted_cpc']}",
+            f"- Predicted conversion rate: {report['budget_forecast']['predicted_conversion_rate']}",
+            f"- Color strategy: {report['budget_forecast']['color_emotion']}",
+            "",
+            "## Dominant Color",
+            f"- Hex: {report['dominant_color']['hex']}",
+            f"- Share: {report['dominant_color']['share']}%",
+            f"- Strategy: {report['dominant_color']['strategy']}",
+            "",
+            "## Action List",
+        ]
+    )
+    lines.extend(f"{index}. {item}" for index, item in enumerate(report["recommended_actions"], start=1))
+    if "accessibility_risk" in report:
+        risk = report["accessibility_risk"]
+        lines.extend(
+            [
+                "",
+                "## Accessibility Risk",
+                f"- Score: {risk['score']}/100",
+                f"- Status: {risk['status']}",
+                f"- Contrast ratio: {risk['contrast_ratio']}:1",
+                f"- At-risk area: {risk['risk_pixels']}%",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Note",
+            report["important_note"],
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def manager_report_table_markdown(rows: list[dict[str, str]]) -> str:
+    lines = [
+        "| Signal | Result | What it means | Manager decision |",
+        "| --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            "| "
+            + " | ".join(
+                markdown_table_cell(row[column])
+                for column in ["Signal", "Result", "What it means", "Manager decision"]
+            )
+            + " |"
+        )
+    return "\n".join(lines)
+
+
+def markdown_table_cell(value: str) -> str:
+    return str(value).replace("|", "\\|").replace("\n", " ")
+
+
 def render_persona_matrix(results: dict) -> None:
     st.plotly_chart(
         generate_persona_radar(results["clutter"], results.get("colors", [])),
@@ -2471,6 +2852,44 @@ def inject_theme() -> None:
         }
         .nl-action-box li {
             margin-bottom: 6px;
+        }
+        .nl-report-panel {
+            border: 1px solid #DCE8EC;
+            border-radius: 8px;
+            background: #FFFFFF;
+            padding: 14px 16px;
+            margin: 14px 0 12px 0;
+        }
+        .nl-report-panel span {
+            display: block;
+            color: #C75E00;
+            font-size: .78rem;
+            font-weight: 800;
+            letter-spacing: 0;
+            text-transform: uppercase;
+        }
+        .nl-report-panel strong {
+            display: block;
+            color: #102F3B;
+            font-size: 1.04rem;
+            margin-top: 4px;
+        }
+        .nl-report-panel p {
+            margin: 7px 0 0 0;
+            color: #365966;
+            line-height: 1.42;
+        }
+        .nl-report-good {
+            border-color: #A8D9C0;
+            background: #F3FBF7;
+        }
+        .nl-report-watch {
+            border-color: #F2D49B;
+            background: #FFF9ED;
+        }
+        .nl-report-risk {
+            border-color: #F0B8B8;
+            background: #FFF5F5;
         }
         .nl-fix-summary {
             margin: 12px 0 16px 0;
